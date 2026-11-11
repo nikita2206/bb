@@ -1,8 +1,10 @@
 import type {
+  GitReposResult,
   WorkspaceMergeBase,
   WorkspaceStatus,
   WorkspaceWorkingTree,
 } from "./contract.js";
+import { formatScopeId } from "./scope.js";
 
 export function makeWorkspaceWorkingTree(
   overrides: Partial<WorkspaceWorkingTree> = {},
@@ -48,5 +50,18 @@ export function makeWorkspaceStatus(
     branch: { currentBranch: "main", defaultBranch: "main" },
     mergeBase: null,
     ...overrides,
+  };
+}
+
+export function makeGitRepos(
+  environmentId: string,
+  repos: readonly string[],
+): GitReposResult {
+  return {
+    outcome: "available",
+    repos: repos.map((repo) => ({
+      repo,
+      scopeId: formatScopeId(environmentId, repo),
+    })),
   };
 }

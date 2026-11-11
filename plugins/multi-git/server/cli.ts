@@ -18,8 +18,8 @@ const JSON_OPTION = {
 
 const ENVIRONMENT_POSITIONAL = [
   {
-    name: "environment-id",
-    description: "Environment whose workspace to read",
+    name: "scope-id",
+    description: "Repository scope to read: <environment-id>/<repo>",
     required: true,
   },
 ] as const;
@@ -228,6 +228,7 @@ function guarded<Args extends unknown[], Result>(
 
 export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
   const reads = {
+    repos: guarded(gitReads.repos),
     status: guarded(gitReads.status),
     diff: guarded(gitReads.diff),
     files: guarded(gitReads.files),
@@ -259,11 +260,30 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
   }
 
   return defineCli({
-    name: "git",
-    summary: "Read an environment's git status, changed files and diffs",
+    name: "multi-git",
+    summary: "Read the git status, changed files and diffs of an environment's repositories",
     description:
-      "Runs git on the environment's machine. Mark files Viewed the way the Diff tab does.",
+      "Runs git on the environment's machine, in one repository scope (<environment-id>/<repo>; see `repos`). Mark files Viewed the way the Diff tab does.",
     commands: {
+      repos: cliCommand({
+        summary: "List an environment's repositories and their scope ids",
+        positionals: [
+          {
+            name: "environment-id",
+            description: "Environment whose workspace holds the repositories",
+            required: true,
+          },
+        ],
+        options: { json: JSON_OPTION },
+        run: withCoreErrors(async ({ positionals, options }) => {
+          const result = await reads.repos(positionals["environment-id"]);
+          if (options.json) return json(result);
+          if (result.outcome !== "available") {
+            return print(`Repositories unavailable: ${result.message}`);
+          }
+          return print(...result.repos.map((entry) => entry.scopeId));
+        }),
+      }),
       status: cliCommand({
         summary: "Show an environment's workspace status",
         positionals: ENVIRONMENT_POSITIONAL,
@@ -277,7 +297,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         run: withCoreErrors(async ({ positionals, options }) => {
           const mergeBaseBranch = options["merge-base-branch"];
           const result = await reads.status(
-            positionals["environment-id"],
+            positionals["scope-id"],
             {
               kind: "explicit",
               ...(mergeBaseBranch === undefined
@@ -326,7 +346,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         },
         run: withCoreErrors(async ({ positionals, options }) => {
           const result = await reads.branches({
-            environmentId: positionals["environment-id"],
+            environmentId: positionals["scope-id"],
             limit: options.limit ?? DEFAULT_BRANCH_LIMIT,
             ...(options.query === undefined ? {} : { query: options.query }),
           });
@@ -349,7 +369,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         options: { ...TARGET_OPTIONS, json: JSON_OPTION },
         run: withCoreErrors(async ({ positionals, options }) => {
           const result = await reads.diff(
-            positionals["environment-id"],
+            positionals["scope-id"],
             buildTarget(options),
           );
           if (options.json) return json(result);
@@ -379,7 +399,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         },
         run: withCoreErrors(async ({ positionals, options }) => {
           const result = await reads.files(
-            positionals["environment-id"],
+            positionals["scope-id"],
             buildTarget(options),
             options["ignore-whitespace"],
             "bypass",
@@ -444,7 +464,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         },
         run: withCoreErrors(async ({ positionals, options }) => {
           const side = await reads.fileSide(
-            positionals["environment-id"],
+            positionals["scope-id"],
             buildFileSideQuery(options),
           );
           if (side.outcome === "unavailable") {
@@ -484,7 +504,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         run: withCoreErrors(async ({ positionals, options }) => {
           if (options.path.length === 0) fail("Provide at least one --path.");
           const result = await reads.patches(
-            positionals["environment-id"],
+            positionals["scope-id"],
             buildTarget(options),
             options["ignore-whitespace"],
             options.path,
@@ -520,7 +540,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         },
         run: withCoreErrors(async ({ positionals, options }) => {
           const result = await viewed.list(
-            positionals["environment-id"],
+            positionals["scope-id"],
             buildTarget(options),
             options.path.length > 0 ? options.path : undefined,
           );
@@ -551,7 +571,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
           json: JSON_OPTION,
         },
         run: withCoreErrors(async ({ positionals, options }) => {
-          const environmentId = positionals["environment-id"];
+          const environmentId = positionals["scope-id"];
           const target = buildTarget(options);
           const revision =
             options.revision ??
@@ -580,7 +600,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         },
         run: withCoreErrors(async ({ positionals, options }) => {
           const result = await viewed.clear(
-            positionals["environment-id"],
+            positionals["scope-id"],
             buildTarget(options),
             options.path,
           );
@@ -594,7 +614,7 @@ export function createGitCli(gitReads: GitReads, gitViewed: GitViewed) {
         options: { ...TARGET_OPTIONS, json: JSON_OPTION },
         run: withCoreErrors(async ({ positionals, options }) => {
           const result = await viewed.clear(
-            positionals["environment-id"],
+            positionals["scope-id"],
             buildTarget(options),
             undefined,
           );

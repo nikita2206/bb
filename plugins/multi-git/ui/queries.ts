@@ -13,11 +13,8 @@ import {
   type GitStatusKeyedQuery,
 } from "../status-state.js";
 import { gitRpcContract } from "../rpc-contract.js";
-import {
-  GIT_SHOW_CHANGES_SETTING,
-  GIT_SHOW_COMMIT_BUTTON_SETTING,
-  type WorkspaceDiffTarget,
-} from "../contract.js";
+import { GIT_SHOW_CHANGES_SETTING, type WorkspaceDiffTarget } from "../contract.js";
+import { parseScopeId } from "../scope.js";
 
 const useGitStatusQuery: GitStatusKeyedQuery = (args) =>
   useRpcKeyedQuery({ contract: gitRpcContract, method: "status", ...args });
@@ -30,13 +27,16 @@ export function useShowGitChanges(): boolean {
   return useSettings().values?.[GIT_SHOW_CHANGES_SETTING] === true;
 }
 
-export function useShowCommitButton(): boolean {
-  return useSettings().values?.[GIT_SHOW_COMMIT_BUTTON_SETTING] === true;
-}
-
 const workspacePaths = new Map<string, string | null>();
 
-export function useWorkspacePath(environmentId: string): string | null {
+function joinRepoPath(root: string, repo: string): string {
+  const separator = root.includes("/") || !root.includes("\\") ? "/" : "\\";
+  return `${root.replace(/[\\/]+$/u, "")}${separator}${repo}`;
+}
+
+export function useWorkspacePath(scopeId: string): string | null {
+  const scope = parseScopeId(scopeId);
+  const environmentId = scope?.environmentId ?? scopeId;
   const sdk = useSdk();
   const [loaded, setLoaded] = useState(() => ({
     environmentId,
@@ -56,9 +56,11 @@ export function useWorkspacePath(environmentId: string): string | null {
       cancelled = true;
     };
   }, [environmentId, sdk]);
-  return loaded.environmentId === environmentId
-    ? loaded.path
-    : (workspacePaths.get(environmentId) ?? null);
+  const path =
+    loaded.environmentId === environmentId
+      ? loaded.path
+      : (workspacePaths.get(environmentId) ?? null);
+  return path === null || scope === null ? path : joinRepoPath(path, scope.repo);
 }
 
 export function useGitViewed(args: {

@@ -4,9 +4,11 @@ import {
   type ExperimentalFakeHostRpcCall,
 } from "@get-bb/plugin-sdk/testing";
 import { makeWorkspaceStatus } from "./testing.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { gitPatchKey } from "./contract.js";
 import plugin from "./server.js";
+
+const SCOPE = "env-1/api";
 
 type Environment = Awaited<
   ReturnType<BbPluginApi["sdk"]["environments"]["get"]>
@@ -19,9 +21,9 @@ function environment(overrides: Partial<Environment> = {}): Environment {
     projectId: "project-1",
     hostId: "host-1",
     path: "/work/env-1",
-    isGitRepo: true,
-    isWorktree: true,
-    branchName: "feature",
+    isGitRepo: false,
+    isWorktree: false,
+    branchName: null,
     baseBranch: null,
     defaultBranch: "main",
     mergeBaseBranch: null,
@@ -71,10 +73,12 @@ function hostResult(call: ExperimentalFakeHostRpcCall): unknown {
   }
 }
 
-async function setup(environments: Record<string, Environment>) {
-  const updates: unknown[] = [];
+async function setup(
+  environments: Record<string, Environment>,
+  host: (call: ExperimentalFakeHostRpcCall) => unknown = hostResult,
+) {
   const fake = createFakePluginHost({
-    pluginId: "bb--git",
+    pluginId: "multi-git",
     sdk: {
       subscribe: () => () => {},
       files: {
@@ -99,16 +103,12 @@ async function setup(environments: Record<string, Environment>) {
           }
           return found;
         },
-        update: async (args: unknown) => {
-          updates.push(args);
-          return environments["env-1"];
-        },
       },
     },
-    experimental_callHostRpc: hostResult,
+    experimental_callHostRpc: host,
   });
   plugin(fake.bb);
-  return { fake, updates };
+  return { fake };
 }
 
 function statusOnBranch(currentBranch: string) {
@@ -117,7 +117,7 @@ function statusOnBranch(currentBranch: string) {
   });
 }
 
-describe("Git plugin server", () => {
+describe("Multi-git plugin server", () => {
   function turnEndEvent(threadId: string) {
     return {
       type: "changed" as const,
@@ -148,7 +148,7 @@ describe("Git plugin server", () => {
     >();
     const state = { branch: "before-edit", threadReads: 0 };
     const fake = createFakePluginHost({
-      pluginId: "bb--git",
+      pluginId: "multi-git",
       sdk: {
         environments: { get: async () => environment() },
         threads: {
@@ -170,11 +170,11 @@ describe("Git plugin server", () => {
     plugin(fake.bb);
     const readBranch = async () =>
       (
-        (await fake.harness.callRpc("status", { keys: ["env-1"] })) as Record<
+        (await fake.harness.callRpc("status", { keys: [SCOPE] })) as Record<
           string,
           { workspace?: { branch: { currentBranch: string | null } } }
         >
-      )["env-1"]?.workspace?.branch.currentBranch;
+      )[SCOPE]?.workspace?.branch.currentBranch;
     const endTurn = async (threadId: string) => {
       for (const subscription of subscriptions) {
         if (subscription.event !== "thread:changed") continue;
@@ -187,7 +187,7 @@ describe("Git plugin server", () => {
 
   it("refreshes status when a turn ends even if the watcher missed the edit", async () => {
     const { fake, state, readBranch, endTurn } = turnEndHarness();
-    fake.harness.experimental_watchRpc("status", { key: "env-1" });
+    fake.harness.experimental_watchRpc("status", { key: SCOPE });
 
     expect(await readBranch()).toBe("before-edit");
     state.branch = "after-edit";
@@ -200,7 +200,7 @@ describe("Git plugin server", () => {
   it("asks nothing about ended turns while no environment is watched, and stops listening on dispose", async () => {
     const { fake, state, subscriptions, endTurn } = turnEndHarness();
     expect(subscriptions.size).toBe(0);
-    const stop = fake.harness.experimental_watchRpc("status", { key: "env-1" });
+    const stop = fake.harness.experimental_watchRpc("status", { key: SCOPE });
     await endTurn("thread-1");
     await endTurn("thread-1");
     expect(state.threadReads).toBe(1);
@@ -209,7 +209,7 @@ describe("Git plugin server", () => {
     await endTurn("thread-2");
     expect(state.threadReads).toBe(1);
 
-    fake.harness.experimental_watchRpc("status", { key: "env-1" });
+    fake.harness.experimental_watchRpc("status", { key: SCOPE });
     expect(subscriptions.size).toBeGreaterThan(0);
     await fake.harness.lifecycle.dispose();
     expect(subscriptions.size).toBe(0);
@@ -217,33 +217,35 @@ describe("Git plugin server", () => {
 
   it("reads fresh status when an environment is watched again after its last viewer left", async () => {
     const { fake, state, readBranch } = turnEndHarness();
-    const stop = fake.harness.experimental_watchRpc("status", { key: "env-1" });
+    const stop = fake.harness.experimental_watchRpc("status", { key: SCOPE });
     expect(await readBranch()).toBe("before-edit");
     stop();
     state.branch = "after-edit";
-    fake.harness.experimental_watchRpc("status", { key: "env-1" });
+    fake.harness.experimental_watchRpc("status", { key: SCOPE });
     expect(await readBranch()).toBe("after-edit");
   });
 
-  it("reads each environment's status against its merge base, one row per key", async () => {
+  it("reads each scope's repository against the repo default, one row per key", async () => {
     const { fake } = await setup({
-      "env-1": environment({ mergeBaseBranch: "release" }),
-      "env-plain": environment({ id: "env-plain", isGitRepo: false }),
+      "env-1": environment(),
       "env-starting": environment({ id: "env-starting", status: "provisioning" }),
     });
 
     await expect(
       fake.harness.callRpc("status", {
-        keys: ["env-1", "env-plain", "env-starting", "env-missing"],
+        keys: [SCOPE, "env-1", "env-starting/api", "env-missing/api"],
       }),
     ).resolves.toEqual({
-      "env-1": { outcome: "available", workspace: makeWorkspaceStatus() },
-      "env-plain": expect.objectContaining({ outcome: "not_applicable" }),
-      "env-starting": {
+      [SCOPE]: { outcome: "available", workspace: makeWorkspaceStatus() },
+      "env-1": {
+        outcome: "failed",
+        message: "Not a repository scope: env-1. Use <environment-id>/<repo>.",
+      },
+      "env-starting/api": {
         outcome: "failed",
         message: "Workspace is still starting.",
       },
-      "env-missing": {
+      "env-missing/api": {
         outcome: "failed",
         message: "Environment not found: env-missing",
       },
@@ -252,18 +254,30 @@ describe("Git plugin server", () => {
       {
         method: "status",
         hostId: "host-1",
-        input: { path: "/work/env-1", mergeBaseBranch: "release" },
+        input: { path: "/work/env-1/api", defaultMergeBase: true },
       },
     ]);
+  });
+
+  it("refuses an environment id where a scope is expected", async () => {
+    const { fake } = await setup({ "env-1": environment() });
+    await expect(
+      fake.harness.callRpc("files", {
+        environmentId: "env-1",
+        target: { type: "uncommitted" },
+        ignoreWhitespace: false,
+      }),
+    ).rejects.toThrow("Not a repository scope: env-1");
+    expect(fake.harness.experimental_hostRpcCalls).toEqual([]);
   });
 
   it("shares one host read for repeated status reads", async () => {
     const { fake } = await setup({ "env-1": environment() });
     await Promise.all([
-      fake.harness.callRpc("status", { keys: ["env-1"] }),
-      fake.harness.callRpc("status", { keys: ["env-1"] }),
+      fake.harness.callRpc("status", { keys: [SCOPE] }),
+      fake.harness.callRpc("status", { keys: [SCOPE] }),
     ]);
-    await fake.harness.callRpc("status", { keys: ["env-1"] });
+    await fake.harness.callRpc("status", { keys: [SCOPE] });
     expect(
       fake.harness.experimental_hostRpcCalls.filter(
         (call) => call.method === "status",
@@ -273,8 +287,8 @@ describe("Git plugin server", () => {
 
   it("reads status afresh for each workspaceStatus call", async () => {
     const { fake } = await setup({ "env-1": environment() });
-    await fake.harness.callRpc("workspaceStatus", { environmentId: "env-1" });
-    await fake.harness.callRpc("workspaceStatus", { environmentId: "env-1" });
+    await fake.harness.callRpc("workspaceStatus", { environmentId: SCOPE });
+    await fake.harness.callRpc("workspaceStatus", { environmentId: SCOPE });
     expect(
       fake.harness.experimental_hostRpcCalls.filter(
         (call) => call.method === "status",
@@ -286,7 +300,7 @@ describe("Git plugin server", () => {
     const { fake } = await setup({ "env-1": environment() });
     await expect(
       fake.harness.callRpc("files", {
-        environmentId: "env-1",
+        environmentId: SCOPE,
         target: { type: "all", mergeBaseBranch: "main" },
         ignoreWhitespace: true,
       }),
@@ -295,7 +309,7 @@ describe("Git plugin server", () => {
       {
         method: "files",
         input: {
-          path: "/work/env-1",
+          path: "/work/env-1/api",
           target: { type: "all", mergeBaseBranch: "main" },
           ignoreWhitespace: true,
         },
@@ -306,7 +320,7 @@ describe("Git plugin server", () => {
   it("reuses a finished file list for the next read", async () => {
     const { fake } = await setup({ "env-1": environment() });
     const input = {
-      environmentId: "env-1",
+      environmentId: SCOPE,
       target: { type: "all" as const, mergeBaseBranch: "main" },
       ignoreWhitespace: false,
     };
@@ -321,7 +335,7 @@ describe("Git plugin server", () => {
 
   it("asks the host again for patches it deferred to stay under its result cap", async () => {
     const fake = createFakePluginHost({
-      pluginId: "bb--git",
+      pluginId: "multi-git",
       sdk: {
         subscribe: () => () => {},
         environments: { get: async () => environment() },
@@ -341,7 +355,7 @@ describe("Git plugin server", () => {
     plugin(fake.bb);
     const keys = ["a.ts", "b.ts", "c.ts"].map((path) =>
       gitPatchKey({
-        environmentId: "env-1",
+        environmentId: SCOPE,
         target: { type: "uncommitted" },
         ignoreWhitespace: false,
         path,
@@ -364,7 +378,7 @@ describe("Git plugin server", () => {
     const { fake } = await setup({ "env-1": environment() });
     const key = (path: string, revision = `rev-${path}`) =>
       gitPatchKey({
-        environmentId: "env-1",
+        environmentId: SCOPE,
         target: { type: "uncommitted" },
         ignoreWhitespace: false,
         path,
@@ -396,7 +410,7 @@ describe("Git plugin server", () => {
     const { fake } = await setup({ "env-1": environment() });
     await expect(
       fake.harness.callRpc("fileSide", {
-        environmentId: "env-1",
+        environmentId: SCOPE,
         query: { target: "uncommitted", path: "gone.ts", side: "new" },
       }),
     ).resolves.toEqual({
@@ -406,38 +420,184 @@ describe("Git plugin server", () => {
     });
     await expect(
       fake.harness.callRpc("fileSide", {
-        environmentId: "env-1",
+        environmentId: SCOPE,
         query: { target: "uncommitted", path: "../escape.ts", side: "new" },
       }),
     ).resolves.toMatchObject({ outcome: "unavailable", code: "invalid_path" });
   });
 
-  it("stores no merge base override when the user picks the default", async () => {
-    const { fake, updates } = await setup({
-      "env-1": environment({ mergeBaseBranch: "release" }),
-    });
+  it("compares with the stored merge base, and with the repo default when none or the default is picked", async () => {
+    const { fake } = await setup({ "env-1": environment() });
+    const statusInput = async () => {
+      await fake.harness.callRpc("refresh", { environmentId: SCOPE });
+      await fake.harness.callRpc("status", { keys: [SCOPE] });
+      return fake.harness.experimental_hostRpcCalls
+        .filter((call) => call.method === "status")
+        .at(-1)?.input;
+    };
+
+    expect(await statusInput()).toMatchObject({ defaultMergeBase: true });
+
     await fake.harness.callRpc("setMergeBase", {
-      environmentId: "env-1",
-      mergeBaseBranch: "main",
-    });
-    await fake.harness.callRpc("setMergeBase", {
-      environmentId: "env-1",
+      environmentId: SCOPE,
       mergeBaseBranch: "develop",
     });
-    expect(updates).toEqual([
-      { environmentId: "env-1", mergeBaseBranch: null },
-      { environmentId: "env-1", mergeBaseBranch: "develop" },
-    ]);
-  });
+    const stored = await statusInput();
+    expect(stored).toMatchObject({ mergeBaseBranch: "develop" });
+    expect(stored).not.toHaveProperty("defaultMergeBase");
+    expect(await fake.bb.storage.kv.list()).toEqual([`merge-base/${SCOPE}`]);
 
-  it("treats the workspace's default branch as the default merge base", async () => {
-    const { fake, updates } = await setup({
-      "env-1": environment({ defaultBranch: null, mergeBaseBranch: "release" }),
-    });
     await fake.harness.callRpc("setMergeBase", {
-      environmentId: "env-1",
+      environmentId: SCOPE,
       mergeBaseBranch: makeWorkspaceStatus().branch.defaultBranch,
     });
-    expect(updates).toEqual([{ environmentId: "env-1", mergeBaseBranch: null }]);
+    expect(await statusInput()).toMatchObject({ defaultMergeBase: true });
+    expect(await fake.bb.storage.kv.list()).toEqual([]);
+  });
+
+  it("lists an environment's repositories as scopes", async () => {
+    const repos = (names: string[]) => (call: ExperimentalFakeHostRpcCall) =>
+      call.method === "repos"
+        ? { outcome: "available", value: { repos: names } }
+        : hostResult(call);
+    const listed = await setup({ "env-1": environment() }, repos(["api", "web"]));
+    await expect(
+      listed.fake.harness.callRpc("repos", { environmentId: "env-1" }),
+    ).resolves.toEqual({
+      outcome: "available",
+      repos: [
+        { repo: "api", scopeId: "env-1/api" },
+        { repo: "web", scopeId: "env-1/web" },
+      ],
+    });
+    expect(listed.fake.harness.experimental_hostRpcCalls).toMatchObject([
+      { method: "repos", input: { path: "/work/env-1" } },
+    ]);
+
+    const empty = await setup({ "env-1": environment() }, repos([]));
+    await expect(
+      empty.fake.harness.callRpc("repos", { environmentId: "env-1" }),
+    ).resolves.toMatchObject({
+      outcome: "not_applicable",
+      reason: "no_repositories",
+    });
+
+    const git = await setup({ "env-1": environment({ isGitRepo: true }) });
+    await expect(
+      git.fake.harness.callRpc("repos", { environmentId: "env-1" }),
+    ).resolves.toMatchObject({
+      outcome: "not_applicable",
+      reason: "git_environment",
+    });
+    expect(git.fake.harness.experimental_hostRpcCalls).toEqual([]);
+  });
+
+  it("refreshes every watched scope of a changed environment and no other", async () => {
+    const subscriptions = new Set<
+      Parameters<BbPluginApi["sdk"]["subscribe"]>[0]
+    >();
+    const fake = createFakePluginHost({
+      pluginId: "multi-git",
+      sdk: {
+        environments: {
+          get: async ({ environmentId }: { environmentId: string }) =>
+            environment({ id: environmentId }),
+        },
+        subscribe: (args: Parameters<BbPluginApi["sdk"]["subscribe"]>[0]) => {
+          subscriptions.add(args);
+          return () => subscriptions.delete(args);
+        },
+      },
+      experimental_callHostRpc: hostResult,
+    });
+    plugin(fake.bb);
+    for (const key of ["env-1/api", "env-1/web", "env-2/api"]) {
+      fake.harness.experimental_watchRpc("status", { key });
+    }
+    fake.harness.experimental_watchRpc("repos", {
+      input: { environmentId: "env-1" },
+    });
+    for (const subscription of subscriptions) {
+      if (subscription.event !== "environment:changed") continue;
+      subscription.callback({
+        type: "changed",
+        entity: "environment",
+        id: "env-1",
+        changes: ["work-status-changed"],
+      });
+    }
+    const invalidated = () =>
+      fake.harness.experimental_rpcInvalidations.flatMap((tags) => tags ?? []);
+    await vi.waitFor(() =>
+      expect(invalidated()).toEqual(
+        expect.arrayContaining([
+          "status:env-1/api",
+          "files:env-1/api",
+          "status:env-1/web",
+          "files:env-1/web",
+          "repos:env-1",
+        ]),
+      ),
+    );
+    expect(invalidated().filter((tag) => tag.includes("env-2"))).toEqual([]);
+  });
+
+  it("keeps each repository's Viewed marks apart in the environment's store", async () => {
+    const calls: { method: string; args: unknown }[] = [];
+    const fake = createFakePluginHost({
+      pluginId: "multi-git",
+      sdk: {
+        environments: {
+          experimental_diffViewed: async (args: unknown) => {
+            calls.push({ method: "list", args });
+            return {
+              files: [
+                { path: "api/a.ts", revision: "rev-a" },
+                { path: "api-v2/b.ts", revision: "rev-b" },
+                { path: "web/a.ts", revision: "rev-w" },
+              ],
+            };
+          },
+          experimental_markDiffViewed: async (args: unknown) => {
+            calls.push({ method: "mark", args });
+            return { ok: true };
+          },
+          experimental_clearDiffViewed: async (args: unknown) => {
+            calls.push({ method: "clear", args });
+            return { ok: true };
+          },
+        },
+      },
+    });
+    plugin(fake.bb);
+    const target = { type: "uncommitted" } as const;
+
+    await expect(
+      fake.harness.callRpc("viewed", {
+        environmentId: SCOPE,
+        target,
+        paths: ["a.ts"],
+      }),
+    ).resolves.toEqual({ files: [{ path: "a.ts", revision: "rev-a" }] });
+    await fake.harness.callRpc("markViewed", {
+      environmentId: SCOPE,
+      target,
+      path: "a.ts",
+      revision: "rev-a2",
+    });
+    await fake.harness.callRpc("clearViewed", { environmentId: SCOPE, target });
+
+    expect(calls).toEqual([
+      {
+        method: "list",
+        args: { environmentId: "env-1", target: "uncommitted", paths: ["api/a.ts"] },
+      },
+      {
+        method: "mark",
+        args: { environmentId: "env-1", target, path: "api/a.ts", revision: "rev-a2" },
+      },
+      { method: "list", args: { environmentId: "env-1", target: "uncommitted" } },
+      { method: "clear", args: { environmentId: "env-1", target, path: "api/a.ts" } },
+    ]);
   });
 });

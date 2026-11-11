@@ -3,7 +3,7 @@ import {
   hasDiffFileFilters,
   type DiffFileFilters,
 } from "./diff-file-filters.js";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useResizeObserver } from "usehooks-ts";
 import { Button } from "@bb/shared-ui/button";
 import {
@@ -205,6 +205,7 @@ function GitDiffFileFilterInput({
 }
 
 interface GitDiffToolbarProps {
+  repoPicker?: ReactNode;
   selectionValue: string;
   selectionOptions: readonly GitDiffSelectionOption[];
   onSelectionChange: (value: string) => void;
@@ -237,6 +238,7 @@ interface GitDiffToolbarProps {
 }
 
 export function GitDiffToolbar({
+  repoPicker,
   selectionValue,
   selectionOptions,
   onSelectionChange,
@@ -283,6 +285,14 @@ export function GitDiffToolbar({
         className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2"
         data-testid="git-diff-toolbar-layout"
       >
+        {repoPicker === undefined ? null : (
+          <div
+            className="min-w-0 max-w-[16rem] shrink basis-40 grow"
+            data-testid="git-diff-toolbar-repo-slot"
+          >
+            {repoPicker}
+          </div>
+        )}
         <div
           className="min-w-0 basis-48 grow-[999]"
           data-testid="git-diff-toolbar-selector-slot"

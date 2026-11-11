@@ -26,6 +26,8 @@ import { WorkspaceChangesList } from "@bb/shared-ui/workspace-changes-list";
 import { useChangedFileActions } from "../changed-files.js";
 import { useMergeBase, type MergeBaseState } from "../merge-base.js";
 import { useGitStatus, useShowGitChanges } from "../queries.js";
+import { useSelectedScope, type RepoEntry } from "../repo-selection.js";
+import { RepoChangeCounts, RepoPicker } from "../RepoPicker.js";
 import type { WorkspaceFileStatus, WorkspaceStatus } from "../../contract.js";
 
 const TOGGLE_ID = "thread-prompt-banner-git-toggle";
@@ -58,11 +60,26 @@ export function useChangedFilesSegmentVisible({
   const kind = experimental_useThreadContextKind();
   const environmentId =
     show && kind === "banner" ? (environment?.id ?? null) : null;
-  const { workspace } = useGitStatus(environmentId);
+  const { repos } = useSelectedScope(environmentId);
   return (
     environmentId !== null &&
-    selectWorkspaceChangedFilesSection(workspace) !== null
+    repos.some(
+      (entry) => selectWorkspaceChangedFilesSection(entry.workspace) !== null,
+    )
   );
+}
+
+export function selectOtherChangedRepos(
+  repos: readonly RepoEntry[],
+  selectedScopeId: string,
+): RepoEntry[] {
+  return repos.filter(
+    (entry) => entry.hasChanges && entry.scopeId !== selectedScopeId,
+  );
+}
+
+export function formatOtherReposLabel(count: number): string | null {
+  return count === 0 ? null : `+${count} repo${count === 1 ? "" : "s"}`;
 }
 
 export function MergeBaseActionView({
@@ -127,23 +144,32 @@ export function ChangedFilesSegmentView({
   segments,
   isExpanded,
   onToggle,
+  repo,
   section,
+  otherChangedRepos,
   action,
   onFileClick,
+  onSelectRepo,
 }: Pick<
   ExperimentalThreadContextSegmentProps,
   "threadId" | "segments" | "isExpanded" | "onToggle"
 > & {
   part: SegmentPart;
-  section: WorkspaceChangedFilesSection<WorkspaceFileStatus>;
+  repo: string;
+  section: WorkspaceChangedFilesSection<WorkspaceFileStatus> | null;
+  otherChangedRepos: readonly RepoEntry[];
   action: ReactNode;
   onFileClick: (file: WorkspaceFileStatus) => void;
+  onSelectRepo: (repo: string) => void;
 }) {
   const focusTarget = part === "summary" ? "trigger" : "collapse";
   const focusRef = useFocusHandoff(threadId, focusTarget, isExpanded);
   if (part === "summary") {
-    const tally = toChangeTally(section.stats);
-    const prefix = CHANGED_FILES_KIND_PREFIX[section.kind];
+    const tally = section === null ? null : toChangeTally(section.stats);
+    const prefix =
+      section === null ? null : CHANGED_FILES_KIND_PREFIX[section.kind];
+    const others = formatOtherReposLabel(otherChangedRepos.length);
+    const summary = tally === null ? "No changes" : renderChangeSummary(tally);
     return (
       <SectionToggleButton
         buttonRef={focusRef}
@@ -159,12 +185,26 @@ export function ChangedFilesSegmentView({
         }
         label={
           <>
-            {prefix} · {renderChangeSummary(tally)}
+            {repo} · {prefix === null ? null : <>{prefix} · </>}
+            {summary}
+            {others === null ? null : <> · {others}</>}
           </>
         }
-        compactLabel={renderChangeSummary(tally)}
+        compactLabel={
+          <>
+            {summary}
+            {others === null ? null : <> {others}</>}
+          </>
+        }
         hideLabelInCompact={segments.length > 2}
-        ariaLabel={`Changed files: ${prefix}, ${formatChangeSummary(tally)}`}
+        ariaLabel={`Changed files: ${[
+          repo,
+          prefix,
+          tally === null ? "No changes" : formatChangeSummary(tally),
+          others,
+        ]
+          .filter((value) => value !== null)
+          .join(", ")}`}
         isExpanded={isExpanded}
         onToggle={() => {
           if (!isExpanded) pendingFocus.set(threadId, "collapse");
@@ -187,37 +227,89 @@ export function ChangedFilesSegmentView({
         onToggle();
       }}
     >
-      <WorkspaceChangesList
-        files={section.files}
-        fileCount={section.stats.fileCount}
-        className="max-h-32 px-3 pb-2 pt-1"
-        onFileClick={onFileClick}
-      />
+      {otherChangedRepos.length > 0 ? (
+        <ul className="m-0 max-h-24 list-none overflow-y-auto px-3 pt-1">
+          {otherChangedRepos.map((entry) => (
+            <li key={entry.repo}>
+              <button
+                type="button"
+                className="flex w-full min-w-0 items-center gap-2 rounded-sm px-1 py-0.5 text-left text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground"
+                title={`Show ${entry.repo}`}
+                onClick={() => onSelectRepo(entry.repo)}
+              >
+                <Icon
+                  name="FolderGit"
+                  className="size-3 shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="min-w-0 flex-1 truncate">{entry.repo}</span>
+                <RepoChangeCounts entry={entry} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {section === null ? null : (
+        <WorkspaceChangesList
+          files={section.files}
+          fileCount={section.stats.fileCount}
+          className="max-h-32 px-3 pb-2 pt-1"
+          onFileClick={onFileClick}
+        />
+      )}
     </AnimatedDisclosureBody>
   );
 }
 
 function SegmentContent({
   environmentId,
+  selected,
+  repos,
+  onSelectRepo,
   ...props
 }: ExperimentalThreadContextSegmentProps & {
   environmentId: string;
+  selected: RepoEntry;
+  repos: readonly RepoEntry[];
+  onSelectRepo: (repo: string) => void;
   part: SegmentPart;
 }) {
   const { workspace } = useGitStatus(environmentId);
   const actions = useChangedFileActions(environmentId);
   const section = selectWorkspaceChangedFilesSection(workspace);
-  if (workspace === undefined || section === null) return null;
+  if (workspace === undefined) return null;
   return (
     <ChangedFilesSegmentView
       {...props}
+      repo={selected.repo}
       section={section}
+      otherChangedRepos={selectOtherChangedRepos(repos, environmentId)}
       action={
         props.part === "action" ? (
-          <MergeBaseAction environmentId={environmentId} workspace={workspace} />
+          <div className="ml-auto flex min-w-0 items-center">
+            <BannerActionSlot>
+              <Icon
+                name="FolderGit"
+                className="size-3.5 shrink-0"
+                aria-hidden="true"
+              />
+              <RepoPicker
+                repos={repos}
+                selected={selected}
+                onSelect={onSelectRepo}
+                popoverAlign="end"
+                muted
+                className="max-w-[10rem]"
+              />
+            </BannerActionSlot>
+            <MergeBaseAction environmentId={environmentId} workspace={workspace} />
+          </div>
         ) : null
       }
-      onFileClick={(file) => actions.onChangedFileClick({ file, section })}
+      onFileClick={(file) => {
+        if (section !== null) actions.onChangedFileClick({ file, section });
+      }}
+      onSelectRepo={onSelectRepo}
     />
   );
 }
@@ -226,11 +318,17 @@ export function changedFilesSegmentPart(part: SegmentPart) {
   return function ChangedFilesSegmentPart(
     props: ExperimentalThreadContextSegmentProps,
   ) {
-    return props.environment === null ? null : (
+    const { selected, repos, select } = useSelectedScope(
+      props.environment?.id ?? null,
+    );
+    return selected === null ? null : (
       <SegmentContent
         {...props}
         part={part}
-        environmentId={props.environment.id}
+        environmentId={selected.scopeId}
+        selected={selected}
+        repos={repos}
+        onSelectRepo={select}
       />
     );
   };

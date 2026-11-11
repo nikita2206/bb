@@ -10,9 +10,10 @@ import type {
   ExperimentalLiveFileTarget,
   ExperimentalThreadTabProps,
 } from "@get-bb/plugin-sdk/app";
-import { makeWorkspaceStatus } from "../../testing.js";
+import { makeGitRepos, makeWorkspaceStatus } from "../../testing.js";
 import { gitRpcContract } from "../../rpc-contract.js";
-import type { GitStatusRow } from "../../contract.js";
+import type { GitReposResult, GitStatusRow } from "../../contract.js";
+import { useRepos } from "../repo-selection.js";
 import { makeDiffFileEntry } from "./diff-file-fixtures.js";
 import { DiffTab, useDiffTabVisible } from "./DiffTab.js";
 
@@ -38,6 +39,7 @@ const PROPS: ExperimentalThreadTabProps = {
 };
 
 const RPC: Partial<PluginRpcTestHandlers<typeof gitRpcContract>> = {
+  repos: ({ environmentId }) => makeGitRepos(environmentId, ["api"]),
   status: ({ keys }) =>
     Object.fromEntries(
       keys.map((key) => [
@@ -89,49 +91,49 @@ function renderTab(
 }
 
 function VisibilityProbe(props: ExperimentalThreadTabProps) {
-  return <output>{String(useDiffTabVisible(props))}</output>;
+  const visible = useDiffTabVisible(props);
+  const repos = useRepos(props.environment?.id ?? null);
+  return (
+    <output>
+      {String(visible)}|{repos.data?.outcome ?? "none"}
+    </output>
+  );
 }
 
 describe("useDiffTabVisible", () => {
-  it.each([
+  it.each<[string, { id: string } | null, GitReposResult, string]>([
     [
       "hidden without an environment",
       null,
-      { outcome: "available" as const, workspace: makeWorkspaceStatus() },
-      "false",
+      makeGitRepos("env-1", ["api"]),
+      "false|none",
     ],
     [
-      "shown for a git workspace",
+      "shown for a workspace holding git repositories",
       { id: "env-1" },
-      { outcome: "available" as const, workspace: makeWorkspaceStatus() },
-      "true",
+      makeGitRepos("env-1", ["api"]),
+      "true|available",
     ],
     [
-      "hidden for a workspace that is not a git repository",
+      "hidden for a workspace that is itself a git repository",
       { id: "env-1" },
       {
-        outcome: "not_applicable" as const,
-        reason: "non_git_environment" as const,
-        message: "Not a git repository.",
+        outcome: "not_applicable",
+        reason: "git_environment",
+        message: "The workspace is a git repository.",
       },
-      "false",
+      "false|not_applicable",
     ],
-    [
-      "shown while status fails, so the tab can offer Retry",
-      { id: "env-1" },
-      { outcome: "failed" as const, message: "Host is offline." },
-      "true",
-    ],
-  ])("is %s", async (_label, environment, row, visible) => {
+  ])("is %s", async (_label, environment, repos, visible) => {
     renderSlot(
       { component: VisibilityProbe },
       { threadId: "thr-1", environment },
       {
-        rpc: { ...RPC, status: statusRows(row) } as PluginRpcTestHandlers<
+        rpc: { ...RPC, repos: () => repos } as PluginRpcTestHandlers<
           typeof gitRpcContract
         >,
         experimental_rpcContract: gitRpcContract,
-        pluginId: "bb--git",
+        pluginId: "multi-git",
       },
     );
     await waitFor(() =>
@@ -206,7 +208,8 @@ describe("DiffTab", () => {
           canOpenFileExternally: (target) =>
             canOpenFileExternally &&
             target.kind === "workspace" &&
-            target.path.length > 0,
+            target.environmentId === "env-1" &&
+            target.path === "api/a.ts",
         },
       );
       await waitFor(() =>

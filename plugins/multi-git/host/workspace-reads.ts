@@ -58,6 +58,7 @@ export type ReadFreshness = GitReadFreshness;
 export interface StatusOptions {
   freshness: ReadFreshness;
   mergeBaseBranch?: string;
+  defaultMergeBase?: boolean;
   maxFiles?: number;
   maxUntrackedLineStatFiles?: number;
   maxUntrackedLineStatBytes?: number;
@@ -1017,6 +1018,17 @@ export class WorkspaceReads {
     const mergeBaseBranch = options.mergeBaseBranch;
     const { freshness } = options;
     const snapshotRead = this.statusSnapshot(freshness.work);
+    const defaultBranchRead = this.defaultBranch(freshness.refs);
+    const mergeBaseRead = (branch: string) =>
+      snapshotRead.then((snapshot) =>
+        this.readMergeBaseStatus(
+          branch,
+          maxFiles,
+          freshness.refs,
+          snapshot.parsed?.headOid ?? null,
+          WORKSPACE_STATUS_GIT_TIMEOUT_MS,
+        ),
+      );
     const otherReads = Promise.all([
       createUncommittedDiffRunner(this.path, (gitArgs, gitOptions) =>
         this.runGit(gitArgs, gitOptions),
@@ -1024,18 +1036,14 @@ export class WorkspaceReads {
         cwd: this.path,
         timeoutMs: WORKSPACE_STATUS_GIT_TIMEOUT_MS,
       }).then((result) => result.stdout),
-      this.defaultBranch(freshness.refs),
+      defaultBranchRead,
       mergeBaseBranch
-        ? snapshotRead.then((snapshot) =>
-            this.readMergeBaseStatus(
-              mergeBaseBranch,
-              maxFiles,
-              freshness.refs,
-              snapshot.parsed?.headOid ?? null,
-              WORKSPACE_STATUS_GIT_TIMEOUT_MS,
-            ),
-          )
-        : null,
+        ? mergeBaseRead(mergeBaseBranch)
+        : options.defaultMergeBase
+          ? defaultBranchRead.then((branch) =>
+              branch ? mergeBaseRead(branch) : null,
+            )
+          : null,
     ]);
     otherReads.catch(() => undefined);
     const snapshot = await snapshotRead;

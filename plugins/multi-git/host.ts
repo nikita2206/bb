@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import nodePath from "node:path";
 
 process.env.GIT_OPTIONAL_LOCKS = "0";
 import {
@@ -6,6 +7,7 @@ import {
   type ExperimentalHostRpcContext,
 } from "@get-bb/plugin-sdk/host";
 import { gitHostContract, type DiffPatchEntry } from "./contract.js";
+import { isValidRepoName } from "./scope.js";
 import {
   selectInitialPatchPaths,
   toDiffFileEntry,
@@ -104,6 +106,38 @@ async function read<T>(
   }
 }
 
+async function hasGitEntry(directory: string): Promise<boolean> {
+  try {
+    const entry = await fs.lstat(nodePath.join(directory, ".git"));
+    return entry.isDirectory() || entry.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function listRepos(root: string): Promise<HostRead<{ repos: string[] }>> {
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    return { outcome: "unavailable", failure: failureFromError(error, root) };
+  }
+  const candidates = entries.filter(
+    (entry) => entry.isDirectory() && isValidRepoName(entry.name),
+  );
+  const found = await Promise.all(
+    candidates.map(async (entry) =>
+      (await hasGitEntry(nodePath.join(root, entry.name))) ? entry.name : null,
+    ),
+  );
+  return {
+    outcome: "available",
+    value: {
+      repos: found.filter((repo): repo is string => repo !== null).sort(),
+    },
+  };
+}
+
 function fitPatchBatch(entries: readonly DiffPatchEntry[]): {
   patches: DiffPatchEntry[];
   deferred: string[];
@@ -135,11 +169,12 @@ export default experimental_defineHostEntry({
     await Promise.all(reads.map((entry) => entry.dispose()));
   },
   handlers: {
-    status: ({ path, freshness, mergeBaseBranch }, context) =>
+    status: ({ path, freshness, mergeBaseBranch, defaultMergeBase }, context) =>
       read(path, context, (reads) =>
         reads.getStatus({
           freshness,
           ...(mergeBaseBranch === undefined ? {} : { mergeBaseBranch }),
+          ...(defaultMergeBase === undefined ? {} : { defaultMergeBase }),
           maxFiles: STATUS_MAX_FILES,
           maxUntrackedLineStatFiles: STATUS_MAX_UNTRACKED_LINE_STAT_FILES,
           maxUntrackedLineStatBytes: STATUS_MAX_UNTRACKED_LINE_STAT_BYTES,
@@ -215,5 +250,6 @@ export default experimental_defineHostEntry({
           ...(selectedBranch === undefined ? {} : { selectedBranch }),
         }),
       ),
+    repos: ({ path }) => listRepos(path),
   },
 });

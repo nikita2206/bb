@@ -12,6 +12,7 @@ import {
   BranchInfoRow,
   GitStatusInfoRow,
   MergeBaseInfoRow,
+  RepositoryInfoRow,
 } from "./ui/info/GitInfoRows.js";
 import { CommitsInfoSection } from "./ui/info/CommitsInfoSection.js";
 import { UncommittedChangesInfoSection } from "./ui/info/UncommittedChangesInfoSection.js";
@@ -19,8 +20,6 @@ import {
   changedFilesSegmentPart,
   useChangedFilesSegmentVisible,
 } from "./ui/segment/ChangedFilesSegment.js";
-import { commitThreadAction } from "./ui/commit/commit-action.js";
-import { CommitDialogOverlay } from "./ui/commit/CommitDialog.js";
 
 const TOGGLE_DIFF_COMMAND_ID = "toggle-diff";
 
@@ -28,7 +27,6 @@ export default definePluginApp((app) => {
   app.commands.register({
     id: TOGGLE_DIFF_COMMAND_ID,
     title: "Toggle diff",
-    defaultShortcut: { key: "d", mod: true },
     isAvailable: (context) => context.threadId !== null,
     run(context) {
       context.experimental_panel.toggleTab({
@@ -50,6 +48,12 @@ export default definePluginApp((app) => {
     component: DiffTab,
     useVisible: useDiffTabVisible,
     experimental_target: gitDiffTabTarget,
+  });
+  app.slots.experimental_threadInfoRow({
+    id: "repository",
+    group: experimental_THREAD_INFO_ROW_GROUPS.git,
+    order: 5,
+    component: RepositoryInfoRow,
   });
   app.slots.experimental_threadInfoRow({
     id: "branch",
@@ -96,10 +100,5 @@ export default definePluginApp((app) => {
     group: experimental_THREAD_INFO_ROW_GROUPS.git,
     order: 10,
     component: GitChangesContextCardRow,
-  });
-  app.slots.experimental_threadAction(commitThreadAction);
-  app.slots.experimental_appOverlay({
-    id: "commit-dialog",
-    component: CommitDialogOverlay,
   });
 });

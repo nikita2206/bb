@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { useSyncExternalStore } from "react";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -8,7 +8,7 @@ import {
   type PluginRpcTestHandlers,
 } from "@get-bb/plugin-sdk/testing/app";
 import { gitRpcContract } from "../rpc-contract.js";
-import { useGitBranches } from "./queries.js";
+import { useGitBranches, useWorkspacePath } from "./queries.js";
 
 afterEach(cleanup);
 
@@ -67,4 +67,22 @@ it("only requests the branch search a typist settles on", async () => {
   }
   await waitFor(() => expect(branchCalls()).toHaveLength(2));
   expect(branchCalls()[1]?.input).toMatchObject({ query: "main" });
+});
+
+function WorkspacePath() {
+  return <output>{useWorkspacePath("env-1/pricing") ?? "none"}</output>;
+}
+
+it("resolves a scope's workspace path to its repo inside the environment", async () => {
+  const get = async ({ environmentId }: { environmentId: string }) => ({
+    path: `/work/${environmentId}/`,
+  });
+  renderSlot({ component: WorkspacePath }, {}, {
+    sdk: { environments: { get } } as never,
+  });
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe(
+      "/work/env-1/pricing",
+    ),
+  );
 });

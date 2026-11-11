@@ -12,14 +12,17 @@ import {
 import { DiffStatsTally } from "@bb/shared-ui/diff-stats-tally";
 import { GIT_DIFF_TAB_ID } from "../../contract.js";
 import { useGitStatus, useShowGitChanges } from "../queries.js";
+import { useSelectedScope } from "../repo-selection.js";
 
 export function GitChangesContextCardRow({
   environment,
 }: ExperimentalThreadContextCardProps) {
-  const environmentId = useShowGitChanges() ? (environment?.id ?? null) : null;
-  const { workspace } = useGitStatus(environmentId);
+  const { scopeId, selected } = useSelectedScope(
+    useShowGitChanges() ? (environment?.id ?? null) : null,
+  );
+  const { workspace } = useGitStatus(scopeId);
   const panel = useAppPanel();
-  if (environmentId === null || !workspace) return null;
+  if (selected === null || !workspace) return null;
   const section = selectWorkspaceChangedFilesSection(workspace);
   if (section === null) return null;
   const tally = toChangeTally(section.stats);
@@ -27,7 +30,7 @@ export function GitChangesContextCardRow({
     <ThreadContextCardRow
       icon="FileDiff"
       label="Changes"
-      title={`${CHANGED_FILES_KIND_PREFIX[section.kind]}: ${formatChangeSummary(tally)}`}
+      title={`${selected.repo} · ${CHANGED_FILES_KIND_PREFIX[section.kind]}: ${formatChangeSummary(tally)}`}
       trailing={
         <DiffStatsTally
           insertions={tally.insertions}

@@ -1,13 +1,12 @@
-import { resolveEnvironmentMergeBaseBranch } from "@bb/domain";
 import {
   experimental_PluginRpcRefusal,
   type BbPluginApi,
 } from "@get-bb/plugin-sdk";
 import {
   GIT_SHOW_CHANGES_SETTING,
-  GIT_SHOW_COMMIT_BUTTON_SETTING,
   gitFilesTag,
   gitRefsTag,
+  gitReposTag,
   gitStatusTag,
   parseGitPatchKey,
   type GitPatchKey,
@@ -15,13 +14,16 @@ import {
   type GitStatusRow,
 } from "./contract.js";
 import { gitRpcContract } from "./rpc-contract.js";
+import { parseScopeId } from "./scope.js";
 import { createGitCli } from "./server/cli.js";
 import {
   createCoalescedInvalidator,
+  reposChanged,
   tagsForEnvironmentChanges,
   type EnvironmentChangeKind,
 } from "./server/invalidation.js";
-import { createGitReads } from "./server/reads.js";
+import { createScopeMergeBases } from "./server/merge-bases.js";
+import { createGitReads, requireScope } from "./server/reads.js";
 import { createReadGenerations } from "./server/generations.js";
 import { createGitViewed } from "./server/viewed.js";
 
@@ -40,18 +42,13 @@ export default function gitPlugin(bb: BbPluginApi): void {
       description: "Show changed files and the merge base above the composer.",
       default: true,
     },
-    [GIT_SHOW_COMMIT_BUTTON_SETTING]: {
-      type: "boolean",
-      label: "Show Commit button",
-      description: "Show Commit in the thread header and actions menu.",
-      default: false,
-    },
   });
   const watchedEnvironments = new Map<string, number>();
   const generations = createReadGenerations((environmentId) =>
     watchedEnvironments.has(environmentId),
   );
-  const reads = createGitReads(bb, generations.freshness);
+  const mergeBases = createScopeMergeBases(bb.storage.kv);
+  const reads = createGitReads(bb, generations.freshness, mergeBases);
   const viewed = createGitViewed(bb);
   const invalidator = createCoalescedInvalidator((tags) =>
     bb.rpc.experimental_invalidate(tags),
@@ -60,7 +57,13 @@ export default function gitPlugin(bb: BbPluginApi): void {
   let stopEnvironmentEvents: (() => void) | null = null;
   const threadEnvironments = new Map<string, string | null>();
 
-  function environmentChanged(
+  function watchedScopes(environmentId: string): string[] {
+    return [...watchedEnvironments.keys()].filter(
+      (id) => parseScopeId(id)?.environmentId === environmentId,
+    );
+  }
+
+  function scopeChanged(
     environmentId: string,
     changes: readonly EnvironmentChangeKind[],
   ): void {
@@ -72,8 +75,20 @@ export default function gitPlugin(bb: BbPluginApi): void {
       generations.changed(environmentId, refsChanged);
       reads.clearCaches(environmentId);
     }
+    invalidator.invalidate(environmentId, tags);
+  }
+
+  function environmentChanged(
+    environmentId: string,
+    changes: readonly EnvironmentChangeKind[],
+  ): void {
+    for (const scopeId of watchedScopes(environmentId)) {
+      scopeChanged(scopeId, changes);
+    }
+    if (!reposChanged(changes)) return;
+    reads.clearCaches(environmentId);
     if (watchedEnvironments.has(environmentId))
-      invalidator.invalidate(environmentId, tags);
+      invalidator.invalidate(environmentId, [gitReposTag(environmentId)]);
   }
 
   const servedStatus = new Map<string, string>();
@@ -90,10 +105,7 @@ export default function gitPlugin(bb: BbPluginApi): void {
       }));
   }
 
-  function turnEnded(environmentId: string | null): void {
-    if (environmentId === null || !watchedEnvironments.has(environmentId)) {
-      return;
-    }
+  function scopeTurnEnded(environmentId: string): void {
     generations.changed(environmentId, false);
     reads.clearCaches(environmentId);
     const served = servedStatus.get(environmentId);
@@ -104,6 +116,11 @@ export default function gitPlugin(bb: BbPluginApi): void {
         gitFilesTag(environmentId),
       ]);
     });
+  }
+
+  function turnEnded(environmentId: string | null): void {
+    if (environmentId === null) return;
+    for (const scopeId of watchedScopes(environmentId)) scopeTurnEnded(scopeId);
   }
 
   function threadTurnEnded(threadId: string): void {
@@ -168,11 +185,16 @@ export default function gitPlugin(bb: BbPluginApi): void {
         }
         if (event.changes.includes("host-connected")) {
           for (const environmentId of watchedEnvironments.keys()) {
-            invalidator.invalidate(environmentId, [
-              gitStatusTag(environmentId),
-              gitFilesTag(environmentId),
-              gitRefsTag(environmentId),
-            ]);
+            invalidator.invalidate(
+              environmentId,
+              parseScopeId(environmentId) === null
+                ? [gitReposTag(environmentId)]
+                : [
+                    gitStatusTag(environmentId),
+                    gitFilesTag(environmentId),
+                    gitRefsTag(environmentId),
+                  ],
+            );
           }
         }
       },
@@ -226,6 +248,7 @@ export default function gitPlugin(bb: BbPluginApi): void {
   bb.rpc.register(
     gitRpcContract,
     {
+      repos: ({ environmentId }) => reads.repos(environmentId),
       async status({ keys }) {
         const results = await Promise.all(
           keys.map(
@@ -313,38 +336,43 @@ export default function gitPlugin(bb: BbPluginApi): void {
       clearViewed: ({ environmentId, target, path }) =>
         viewed.clear(environmentId, target, path),
       async setMergeBase({ environmentId, mergeBaseBranch }) {
-        const environment = await bb.sdk.environments.get({ environmentId });
+        const environment = await bb.sdk.environments.get({
+          environmentId: requireScope(environmentId).environmentId,
+        });
         if (environment.status !== "ready" || environment.path === null) {
           return { ok: false as const, environmentStatus: environment.status };
         }
-        const implicit = resolveEnvironmentMergeBaseBranch({
-          mergeBaseBranch: null,
-          baseBranch: environment.baseBranch,
-          defaultBranch:
-            (await workspaceDefaultBranch(environmentId)) ??
-            environment.defaultBranch,
-        });
+        const implicit = await workspaceDefaultBranch(environmentId);
         const persisted =
           mergeBaseBranch === null || mergeBaseBranch === implicit
             ? null
             : mergeBaseBranch;
-        if (persisted !== environment.mergeBaseBranch) {
-          await bb.sdk.environments.update({
-            environmentId,
-            mergeBaseBranch: persisted,
-          });
+        if (persisted !== (await mergeBases.get(environmentId))) {
+          await mergeBases.set(environmentId, persisted);
           void statusRow(environmentId);
+          bb.rpc.experimental_invalidate([gitStatusTag(environmentId)]);
         }
         return { ok: true as const };
       },
       refresh({ environmentId }) {
-        reads.clearCaches(environmentId);
-        generations.reset(environmentId);
-        bb.rpc.experimental_invalidate([
-          gitStatusTag(environmentId),
-          gitFilesTag(environmentId),
-          gitRefsTag(environmentId),
-        ]);
+        const scopeIds =
+          parseScopeId(environmentId) === null
+            ? watchedScopes(environmentId)
+            : [environmentId];
+        const tags = scopeIds.flatMap((scopeId) => {
+          reads.clearCaches(scopeId);
+          generations.reset(scopeId);
+          return [
+            gitStatusTag(scopeId),
+            gitFilesTag(scopeId),
+            gitRefsTag(scopeId),
+          ];
+        });
+        if (parseScopeId(environmentId) === null) {
+          reads.clearCaches(environmentId);
+          tags.push(gitReposTag(environmentId));
+        }
+        bb.rpc.experimental_invalidate(tags);
         return { ok: true as const };
       },
     },
@@ -356,6 +384,7 @@ export default function gitPlugin(bb: BbPluginApi): void {
   );
 
   for (const method of [
+    "repos",
     "status",
     "files",
     "patches",

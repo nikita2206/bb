@@ -21,6 +21,7 @@ import {
   type WorkspaceFileStatusKind,
   type WorkspaceStatus,
 } from "../contract.js";
+import { workspaceFileTarget } from "./repo-selection.js";
 
 interface FileStatusGlyph {
   icon: IconName;
@@ -107,7 +108,7 @@ export function useChangedFileActions(
   const onOpenChangedFile = useCallback(
     (path: string) => {
       navigate.experimental_openFilePreview({
-        target: { kind: "workspace", environmentId, path },
+        target: workspaceFileTarget(environmentId, path),
         location: null,
       });
     },
@@ -122,9 +123,7 @@ export function useChangedFileActions(
       }
       navigate.experimental_openFilePreview({
         target: {
-          kind: "workspace",
-          environmentId,
-          path: selection.file.path,
+          ...workspaceFileTarget(environmentId, selection.file.path),
           ...(open.ref === undefined ? {} : { experimental_ref: open.ref }),
         },
         location: null,

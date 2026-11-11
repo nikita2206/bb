@@ -1,16 +1,5 @@
-/**
- * A scope is one git repository inside an environment whose workspace root is
- * not itself a git repository (e.g. a Picnic VM copy holding many repos).
- *
- * Every RPC field, cache key, tag and patch key that the upstream git plugin
- * names `environmentId` carries a scope id here instead. Keeping the field
- * names keeps this fork's diff against plugins/git small, so upstream changes
- * merge with little effort.
- */
-
 const SEPARATOR = "/";
 
-/** A repository is a direct child directory of the workspace root. */
 const REPO_NAME_PATTERN = /^[^/\\\u0000]+$/u;
 
 export interface Scope {
@@ -29,7 +18,6 @@ export function formatScopeId(environmentId: string, repo: string): string {
   return `${environmentId}${SEPARATOR}${repo}`;
 }
 
-/** Null when the id is not `<environmentId>/<repo>`. */
 export function parseScopeId(scopeId: string): Scope | null {
   const index = scopeId.indexOf(SEPARATOR);
   if (index <= 0) return null;

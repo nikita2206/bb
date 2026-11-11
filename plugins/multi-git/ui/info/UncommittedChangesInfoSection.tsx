@@ -10,6 +10,7 @@ import {
   type ChangedFileActions,
 } from "../changed-files.js";
 import { useGitStatus } from "../queries.js";
+import { useSelectedScope } from "../repo-selection.js";
 import type { WorkspaceStatus } from "../../contract.js";
 
 export function UncommittedChangesSectionView({
@@ -41,7 +42,8 @@ function UncommittedChangesContent({ environmentId }: { environmentId: string })
 export function UncommittedChangesInfoSection({
   environment,
 }: ExperimentalThreadInfoProps) {
-  return environment === null ? null : (
-    <UncommittedChangesContent environmentId={environment.id} />
+  const { scopeId } = useSelectedScope(environment?.id ?? null);
+  return scopeId === null ? null : (
+    <UncommittedChangesContent environmentId={scopeId} />
   );
 }

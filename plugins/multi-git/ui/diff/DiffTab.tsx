@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useResizeObserver } from "usehooks-ts";
 import {
   experimental_useFixedTabTarget as useFixedTabTarget,
@@ -13,6 +13,12 @@ import type { DiffFileEntry } from "../../contract.js";
 import { GIT_DIFF_TAB_REFERENCE } from "../diff-tab-target.js";
 import { useMergeBase } from "../merge-base.js";
 import { useGitStatus, useWorkspacePath } from "../queries.js";
+import {
+  useReposAvailable,
+  useSelectedScope,
+  workspaceFileTarget,
+} from "../repo-selection.js";
+import { RepoPicker } from "../RepoPicker.js";
 import {
   DEFAULT_DIFF_FILE_FILTERS,
   diffExtensionCounts,
@@ -45,25 +51,40 @@ const EMPTY_DIFF_FILES: readonly DiffFileEntry[] = [];
 export function useDiffTabVisible({
   environment,
 }: ExperimentalThreadTabProps): boolean {
-  const status = useGitStatus(environment?.id ?? null);
-  return (
-    environment !== null && status.result?.outcome !== "not_applicable"
-  );
+  const available = useReposAvailable(environment?.id ?? null);
+  return environment !== null && available;
 }
 
 const diffFiltersByEnvironment = new Map<string, DiffFileFilters>();
 
 export function DiffTab({ environment }: ExperimentalThreadTabProps) {
-  if (environment === null) return null;
+  const { scopeId, selected, repos, select } = useSelectedScope(
+    environment?.id ?? null,
+  );
+  if (scopeId === null) return null;
   return (
     <EnvironmentDiffTabGate
-      key={environment.id}
-      environmentId={environment.id}
+      key={scopeId}
+      environmentId={scopeId}
+      repoPicker={
+        <RepoPicker
+          repos={repos}
+          selected={selected}
+          onSelect={select}
+          variant="default"
+        />
+      }
     />
   );
 }
 
-function EnvironmentDiffTabGate({ environmentId }: { environmentId: string }) {
+function EnvironmentDiffTabGate({
+  environmentId,
+  repoPicker,
+}: {
+  environmentId: string;
+  repoPicker: ReactNode;
+}) {
   const status = useGitStatus(environmentId);
   const [gitDiffFilters, setGitDiffFilters] = useState(
     () => diffFiltersByEnvironment.get(environmentId) ?? DEFAULT_DIFF_FILE_FILTERS,
@@ -79,12 +100,12 @@ function EnvironmentDiffTabGate({ environmentId }: { environmentId: string }) {
     return (
       <EnvironmentDiffTab
         environmentId={environmentId}
+        repoPicker={repoPicker}
         gitDiffFilters={gitDiffFilters}
         onGitDiffFiltersChange={changeGitDiffFilters}
       />
     );
   }
-  if (status.result?.outcome === "not_applicable") return null;
   const message =
     status.errorMessage ??
     (status.failure === undefined ? null : status.failure.message);
@@ -92,6 +113,7 @@ function EnvironmentDiffTabGate({ environmentId }: { environmentId: string }) {
   return (
     <EmptyStatePanel className="m-4 rounded-lg" role="status">
       <div className="flex flex-col items-center gap-3 text-center">
+        <div className="w-56 max-w-full">{repoPicker}</div>
         <span>{message}</span>
         <Button
           type="button"
@@ -108,10 +130,12 @@ function EnvironmentDiffTabGate({ environmentId }: { environmentId: string }) {
 
 function EnvironmentDiffTab({
   environmentId,
+  repoPicker,
   gitDiffFilters,
   onGitDiffFiltersChange: setGitDiffFilters,
 }: {
   environmentId: string;
+  repoPicker: ReactNode;
   gitDiffFilters: DiffFileFilters;
   onGitDiffFiltersChange: (filters: DiffFileFilters) => void;
 }) {
@@ -140,7 +164,7 @@ function EnvironmentDiffTab({
   const openFileInEditor = useCallback(
     (path: string) => {
       navigate.experimental_openFileExternally({
-        target: { kind: "workspace", environmentId, path },
+        target: workspaceFileTarget(environmentId, path),
         location: null,
       });
     },
@@ -149,7 +173,7 @@ function EnvironmentDiffTab({
   const openFilePreview = useCallback(
     (path: string) => {
       navigate.experimental_openFilePreview({
-        target: { kind: "workspace", environmentId, path },
+        target: workspaceFileTarget(environmentId, path),
         location: null,
       });
     },
@@ -256,6 +280,7 @@ function EnvironmentDiffTab({
     >
       <div className={DIFF_TOOLBAR_CHROME_CLASS}>
           <GitDiffToolbar
+            repoPicker={repoPicker}
             selectionValue={gitDiffSelectValue}
             selectionOptions={gitDiffSelectOptions}
             onSelectionChange={onGitDiffSelectionChange}

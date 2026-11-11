@@ -144,7 +144,6 @@ export type WorkspaceStatus = z.infer<typeof workspaceStatusSchema>;
 
 export const GIT_DIFF_TAB_ID = "diff";
 export const GIT_SHOW_CHANGES_SETTING = "showGitChanges";
-export const GIT_SHOW_COMMIT_BUTTON_SETTING = "showCommitButton";
 export const GIT_STATUS_MAX_KEYS = 200;
 export const GIT_PATCHES_MAX_KEYS = 50;
 export const GIT_VIEWED_MAX_PATHS = 500;
@@ -165,6 +164,10 @@ export function gitRefsTag(environmentId: string): string {
 
 export function gitViewedTag(environmentId: string): string {
   return `viewed:${environmentId}`;
+}
+
+export function gitReposTag(environmentId: string): string {
+  return `repos:${environmentId}`;
 }
 
 const notApplicableSchema = z
@@ -198,6 +201,29 @@ export const gitStatusRowSchema = z.discriminatedUnion("outcome", [
     .strict(),
 ]);
 export type GitStatusRow = z.infer<typeof gitStatusRowSchema>;
+
+export const gitReposResultSchema = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("available"),
+      repos: z
+        .array(
+          z
+            .object({ repo: z.string().min(1), scopeId: z.string().min(1) })
+            .strict(),
+        )
+        .min(1),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("not_applicable"),
+      reason: z.enum(["git_environment", "no_repositories"]),
+      message: z.string().min(1),
+    })
+    .strict(),
+]);
+export type GitReposResult = z.infer<typeof gitReposResultSchema>;
 
 export const gitDiffResultSchema = z.discriminatedUnion("outcome", [
   z
@@ -371,6 +397,7 @@ export const gitHostContract = defineRpcContract({
       .extend({
         freshness: hostReadFreshnessSchema,
         mergeBaseBranch: z.string().min(1).optional(),
+        defaultMergeBase: z.boolean().optional(),
       })
       .strict(),
     output: hostReadResultSchema(workspaceStatusSchema),
@@ -431,5 +458,12 @@ export const gitHostContract = defineRpcContract({
       })
       .strict(),
     output: gitBranchOptionsSchema,
+  },
+  repos: {
+    experimental_retryable: true,
+    input: hostPathSchema,
+    output: hostReadResultSchema(
+      z.object({ repos: z.array(z.string().min(1)) }).strict(),
+    ),
   },
 });

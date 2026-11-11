@@ -17,9 +17,9 @@ const ENVIRONMENT = {
   projectId: "project-1",
   hostId: "host-1",
   path: "/work/env-1",
-  isGitRepo: true,
-  isWorktree: true,
-  branchName: "feature",
+  isGitRepo: false,
+  isWorktree: false,
+  branchName: null,
   baseBranch: null,
   defaultBranch: "main",
   mergeBaseBranch: null,
@@ -33,7 +33,7 @@ const ENVIRONMENT = {
   workspaceProvisionType: "worktree",
 } as Environment;
 
-const VIEWED_FILES = [{ path: "src/a.ts", revision: "rev-a" }];
+const VIEWED_FILES = [{ path: "api/src/a.ts", revision: "rev-a" }];
 
 function unexpectedHostCall(call: ExperimentalFakeHostRpcCall): never {
   throw new Error(`unexpected host call ${call.method}`);
@@ -56,7 +56,7 @@ function setup(
   const viewedCalls: { method: string; args: unknown }[] = [];
   const fileReads: unknown[] = [];
   const fake = createFakePluginHost({
-    pluginId: "bb--git",
+    pluginId: "multi-git",
     sdk: {
       environments: {
         get: async () => options.environment ?? ENVIRONMENT,
@@ -158,14 +158,29 @@ function filesHost() {
   };
 }
 
-describe("bb git", () => {
+describe("bb multi-git", () => {
+  it("lists an environment's repositories by scope id", async () => {
+    const { fake } = setup(() => ({
+      outcome: "available",
+      value: { repos: ["api", "web"] },
+    }));
+    expect(await stdout(fake, ["repos", "env-1"])).toBe("env-1/api\nenv-1/web\n");
+    expect(JSON.parse(await stdout(fake, ["repos", "env-1", "--json"]))).toEqual({
+      outcome: "available",
+      repos: [
+        { repo: "api", scopeId: "env-1/api" },
+        { repo: "web", scopeId: "env-1/web" },
+      ],
+    });
+  });
+
   it("prints status against the requested merge base and qualifies incomplete counts", async () => {
     const { fake } = setup(() => ({
       outcome: "available",
       value: dirtyStatus,
     }));
     expect(
-      await stdout(fake, ["status", "env-1", "--merge-base-branch", "main"]),
+      await stdout(fake, ["status", "env-1/api", "--merge-base-branch", "main"]),
     ).toBe(
       [
         "State: dirty_uncommitted",
@@ -193,7 +208,7 @@ describe("bb git", () => {
         workingTree: { ...dirtyStatus.workingTree, lineStatsComplete: false },
       }),
     }));
-    expect(await stdout(fake, ["status", "env-1"])).toBe(
+    expect(await stdout(fake, ["status", "env-1/api"])).toBe(
       [
         "State: dirty_uncommitted",
         "Branch: main",
@@ -205,15 +220,14 @@ describe("bb git", () => {
     );
   });
 
-  it("explains non-git environments", async () => {
-    const { fake } = setup(
-      () => {
-        throw new Error("non-git environments do not reach the host");
-      },
-      { environment: { ...ENVIRONMENT, isGitRepo: false } },
-    );
-    expect(await stdout(fake, ["status", "env-1"])).toBe(
-      "Status unavailable: Workspace status is not available for non-git environments\n",
+  it("refuses an environment id where a repository scope is expected", async () => {
+    const { fake } = setup(() => {
+      throw new Error("environment ids do not reach the host");
+    });
+    const result = await fake.harness.runCli(["status", "env-1"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      "Error: Not a repository scope: env-1. Use <environment-id>/<repo>.\n",
     );
   });
 
@@ -224,7 +238,7 @@ describe("bb git", () => {
     }));
     const output = await stdout(fake, [
       "status",
-      "env-1",
+      "env-1/api",
       "--merge-base-branch",
       "main",
       "--json",
@@ -275,7 +289,7 @@ describe("bb git", () => {
     expect(
       await stdout(fake, [
         "branches",
-        "env-1",
+        "env-1/api",
         "--query",
         "main",
         "--limit",
@@ -311,7 +325,7 @@ describe("bb git", () => {
     expect(
       await stdout(fake, [
         "diff",
-        "env-1",
+        "env-1/api",
         "--target",
         "all",
         "--merge-base-branch",
@@ -342,7 +356,7 @@ describe("bb git", () => {
     expect(
       await stdout(truncated.fake, [
         "diff",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
       ]),
@@ -359,7 +373,7 @@ describe("bb git", () => {
       },
     }));
     expect(
-      await stdout(empty.fake, ["diff", "env-1", "--target", "uncommitted"]),
+      await stdout(empty.fake, ["diff", "env-1/api", "--target", "uncommitted"]),
     ).toBe("");
   });
 
@@ -377,7 +391,7 @@ describe("bb git", () => {
     expect(
       await stdout(fake, [
         "diff",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
         "--json",
@@ -403,7 +417,7 @@ describe("bb git", () => {
   it("lists changed files with renames, binary stats and the shortstat", async () => {
     const { fake } = setup(filesHost);
     expect(
-      await stdout(fake, ["files", "env-1", "--target", "uncommitted"]),
+      await stdout(fake, ["files", "env-1/api", "--target", "uncommitted"]),
     ).toBe(
       [
         "modified\t+2 -1\ttracked\tauto\tsrc/a.ts",
@@ -418,7 +432,7 @@ describe("bb git", () => {
     const { fake } = setup(filesHost);
     const output = await stdout(fake, [
       "files",
-      "env-1",
+      "env-1/api",
       "--target",
       "uncommitted",
       "--json",
@@ -472,7 +486,7 @@ describe("bb git", () => {
   it("prints a text file side with the newline console.log appended", async () => {
     const { fake, fileReads } = setup(unexpectedHostCall, {
       file: {
-        path: "/work/env-1/README.md",
+        path: "/work/env-1/api/README.md",
         content: "# Title\n",
         contentEncoding: "utf8",
         mimeType: "text/markdown",
@@ -482,7 +496,7 @@ describe("bb git", () => {
     expect(
       await stdout(fake, [
         "file",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
         "--path",
@@ -494,8 +508,8 @@ describe("bb git", () => {
     expect(fileReads).toEqual([
       {
         hostId: "host-1",
-        path: "/work/env-1/README.md",
-        rootPath: "/work/env-1",
+        path: "/work/env-1/api/README.md",
+        rootPath: "/work/env-1/api",
         ref: "HEAD",
       },
     ]);
@@ -514,7 +528,7 @@ describe("bb git", () => {
     expect(
       await stdout(fake, [
         "file",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
         "--path",
@@ -538,7 +552,7 @@ describe("bb git", () => {
     expect(
       await stdout(fake, [
         "file",
-        "env-1",
+        "env-1/api",
         "--target",
         "commit",
         "--sha",
@@ -583,7 +597,7 @@ describe("bb git", () => {
     expect(
       await stdout(fake, [
         "patch",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
         "--path",
@@ -632,7 +646,7 @@ describe("bb git", () => {
       await stdout(marked.fake, [
         "viewed",
         "list",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
       ]),
@@ -648,7 +662,7 @@ describe("bb git", () => {
       await stdout(none.fake, [
         "viewed",
         "list",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
       ]),
@@ -657,7 +671,7 @@ describe("bb git", () => {
       await stdout(none.fake, [
         "viewed",
         "list",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
         "--json",
@@ -671,7 +685,7 @@ describe("bb git", () => {
       await stdout(fake, [
         "viewed",
         "mark",
-        "env-1",
+        "env-1/api",
         "--target",
         "uncommitted",
         "--path",
@@ -684,7 +698,7 @@ describe("bb git", () => {
         args: {
           environmentId: "env-1",
           target: { type: "uncommitted" },
-          path: "src/a.ts",
+          path: "api/src/a.ts",
           revision: "100644:aaa:100644:bbb",
         },
       },
@@ -697,7 +711,7 @@ describe("bb git", () => {
     });
     const result = await fake.harness.runCli([
       "diff",
-      "env-1",
+      "env-1/api",
       "--target",
       "commit",
     ]);
@@ -709,10 +723,10 @@ describe("bb git", () => {
   });
 });
 
-describe("bb git errors", () => {
+describe("bb multi-git errors", () => {
   it("reports a missing environment with the old bb environment error envelope", async () => {
     const fake = createFakePluginHost({
-      pluginId: "bb--git",
+      pluginId: "multi-git",
       sdk: {
         environments: {
           get: async () => {
@@ -724,7 +738,7 @@ describe("bb git errors", () => {
       },
     });
     plugin(fake.bb);
-    const result = await fake.harness.runCli(["status", "env-gone", "--json"]);
+    const result = await fake.harness.runCli(["status", "env-gone/api", "--json"]);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("Error: Environment not found\n");
     expect(JSON.parse(result.stdout ?? "")).toEqual({

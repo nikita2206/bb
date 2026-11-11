@@ -1,6 +1,7 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { WorkspaceDiffTarget } from "../contract.js";
 import type { DiffViewedFile } from "@bb/server-contract";
+import { requireScope } from "./reads.js";
 
 export interface GitViewed {
   list(
@@ -35,25 +36,61 @@ function diffQuery(target: WorkspaceDiffTarget) {
 
 export function createGitViewed(bb: BbPluginApi): GitViewed {
   const environments = bb.sdk.environments;
+  function scoped(scopeId: string) {
+    const { environmentId, repo } = requireScope(scopeId);
+    return { environmentId, prefix: `${repo}/` };
+  }
+  async function list(
+    scopeId: string,
+    target: WorkspaceDiffTarget,
+    paths: string[] | undefined,
+  ): Promise<{ files: DiffViewedFile[] }> {
+    const { environmentId, prefix } = scoped(scopeId);
+    const { files } = await environments.experimental_diffViewed({
+      environmentId,
+      ...diffQuery(target),
+      ...(paths === undefined
+        ? {}
+        : { paths: paths.map((path) => `${prefix}${path}`) }),
+    });
+    return {
+      files: files
+        .filter((file) => file.path.startsWith(prefix))
+        .map((file) => ({
+          path: file.path.slice(prefix.length),
+          revision: file.revision,
+        })),
+    };
+  }
   return {
-    list: (environmentId, target, paths) =>
-      environments.experimental_diffViewed({
-        environmentId,
-        ...diffQuery(target),
-        ...(paths === undefined ? {} : { paths }),
-      }),
-    mark: (environmentId, target, path, revision) =>
-      environments.experimental_markDiffViewed({
+    list,
+    mark: (scopeId, target, path, revision) => {
+      const { environmentId, prefix } = scoped(scopeId);
+      return environments.experimental_markDiffViewed({
         environmentId,
         target,
-        path,
+        path: `${prefix}${path}`,
         revision,
-      }),
-    clear: (environmentId, target, path) =>
-      environments.experimental_clearDiffViewed({
-        environmentId,
-        target,
-        ...(path === undefined ? {} : { path }),
-      }),
+      });
+    },
+    async clear(scopeId, target, path) {
+      const { environmentId, prefix } = scoped(scopeId);
+      const paths =
+        path === undefined
+          ? (await list(scopeId, target, undefined)).files.map(
+              (file) => file.path,
+            )
+          : [path];
+      await Promise.all(
+        paths.map((repoPath) =>
+          environments.experimental_clearDiffViewed({
+            environmentId,
+            target,
+            path: `${prefix}${repoPath}`,
+          }),
+        ),
+      );
+      return { ok: true };
+    },
   };
 }

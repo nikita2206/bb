@@ -1,10 +1,32 @@
-# Git
+# Repos (multi-git)
 
-Owns git status, changed files, diffs and the Diff tab for bb environments. Bundled and enabled by default.
+A fork of `plugins/git` (bb--git) for environments whose workspace root is not
+a git repository but holds several repositories as direct child directories
+(e.g. a Picnic VM's copy of the Picnic repos). bb core marks such environments
+`isGitRepo: false`, so bb--git hides its Diff tab and segments there; this
+plugin shows the same views per repository instead. It returns
+`not_applicable` for git-root environments, so the two never both show.
 
-- `host.ts` runs git in the environment's workspace on its machine: status, diff, changed files, patches and branch options. Reads share one cache per workspace path.
-- `server.ts` resolves environments, fills in the merge base the thread uses, serves the keyed `status` and `patches` reads, `files`, `diff`, `fileSide`, `branches` and the Viewed and merge-base mutations, and registers `bb git`. `server/invalidation.ts` turns the daemon's file and ref change events into one coalesced refresh per environment.
-- `app.tsx` registers the Diff tab (`experimental_tab`, with a file or commit target and the `toggle-diff` command), the Info rows and sections, and the changed-files segment of the composer's thread context row. Their components live in `ui/`.
-- `contract.ts` is the public contract. Core reads it with `pluginId: "bb--git"` for the Commit dialog, the composer branch chip and `bb thread show`, the way any other plugin would.
+Not bundled: install it from this directory (`bb plugin install <path>`).
+Keep the diff against `plugins/git` small so upstream changes merge easily.
 
-Viewed marks stay in core's `diff_viewed_files` table; the plugin reads and writes them through the SDK.
+- A scope is one repository: `<environmentId>/<repo>` (`scope.ts`). Every
+  RPC field, status key, patch key, cache key and tag that bb--git names
+  `environmentId` carries a scope id here; field names are unchanged on
+  purpose, to keep the fork's diff small.
+- `host.ts` is bb--git's host plus `repos`, which lists child directories
+  holding a `.git` entry (symlinks skipped). Status can resolve the repo's
+  default branch as the merge base itself, without an extra round trip.
+- `server.ts` resolves a scope to its environment and repo path. Merge-base
+  choices live in the plugin's kv storage (`merge-base/<scopeId>`), not on the
+  environment. Viewed marks stay in core's `diff_viewed_files` table under the
+  real environment id with `<repo>/`-prefixed paths. Environment events and
+  thread turn ends fan out to every watched scope of that environment; bb's
+  watcher ignores `<repo>/.git`, so a commit with no file change refreshes on
+  the next turn end or `refresh`.
+- `app.tsx` registers the Diff tab, Info rows (including Repository) and
+  sections, and the changed-files segment. `ui/repo-selection.ts` holds the
+  selected repo per environment (shared by every slot; default: first repo
+  with changes); `ui/RepoPicker.tsx` switches it.
+- Removed from bb--git: the Commit action and dialog (core's commit only
+  works on git-root environments) and the `Mod+D` shortcut (bb--git owns it).

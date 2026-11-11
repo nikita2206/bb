@@ -48,3 +48,41 @@ describe("Git plugin host patches", () => {
     }
   });
 });
+
+describe("Git plugin host repos", () => {
+  it("lists child directories with a .git directory or file, skipping symlinks and plain directories", async () => {
+    const root = await makeTempDir("bb-multi-git-root-");
+    const tempDir = await makeTempDir("bb-multi-git-temp-");
+    await fs.mkdir(path.join(root, "web"));
+    await initRepo(path.join(root, "web"));
+    await fs.mkdir(path.join(root, "api", ".git"), { recursive: true });
+    await fs.mkdir(path.join(root, "worktree"));
+    await fs.writeFile(
+      path.join(root, "worktree", ".git"),
+      "gitdir: /elsewhere/.git/worktrees/worktree\n",
+    );
+    await fs.mkdir(path.join(root, "notes"));
+    await fs.writeFile(path.join(root, "README.md"), "root\n");
+    await fs.symlink(path.join(root, "web"), path.join(root, "linked"));
+    await fs.mkdir(path.join(root, "bad\\name", ".git"), { recursive: true });
+    const harness = experimental_createHostEntryHarness(hostEntry, {
+      experimental_paths: { dataDir: tempDir, tempDir },
+    });
+    try {
+      await expect(
+        harness.experimental_call("repos", { path: root }),
+      ).resolves.toEqual({
+        outcome: "available",
+        value: { repos: ["api", "web", "worktree"] },
+      });
+      await expect(
+        harness.experimental_call("repos", { path: path.join(root, "gone") }),
+      ).resolves.toMatchObject({
+        outcome: "unavailable",
+        failure: { code: "path_not_found" },
+      });
+    } finally {
+      await harness.experimental_dispose();
+    }
+  });
+});

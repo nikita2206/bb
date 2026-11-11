@@ -12,12 +12,14 @@ import {
   type GitFileSideQuery,
   type GitFilesResult,
   type GitReadFreshness,
+  type GitReposResult,
   type GitStatusResult,
   type WorkspaceDiffTarget,
 } from "../contract.js";
+import { formatScopeId, parseScopeId, type Scope } from "../scope.js";
+import type { ScopeMergeBases } from "./merge-bases.js";
 import {
   joinHostPath,
-  resolveEnvironmentMergeBaseBranch,
   type GitBranchOptions,
 } from "@bb/domain";
 import { createAsyncTtlMemo } from "@bb/async-cache";
@@ -34,19 +36,6 @@ interface ReadyGitEnvironment {
   environment: Environment;
   hostId: string;
   path: string;
-}
-
-const NOT_APPLICABLE_MESSAGES = {
-  status: "Workspace status is not available for non-git environments",
-  diff: "Workspace diff is not available for non-git environments",
-} as const;
-
-function notApplicable(kind: keyof typeof NOT_APPLICABLE_MESSAGES) {
-  return {
-    outcome: "not_applicable" as const,
-    reason: "non_git_environment" as const,
-    message: NOT_APPLICABLE_MESSAGES[kind],
-  };
 }
 
 function workspaceUnavailableMessage(environment: Environment): string {
@@ -71,6 +60,17 @@ function requireWorkspacePath(environment: Environment): string {
     });
   }
   return environment.path;
+}
+
+export function requireScope(scopeId: string): Scope {
+  const scope = parseScopeId(scopeId);
+  if (scope === null) {
+    throw new experimental_PluginRpcRefusal({
+      code: "invalid",
+      message: `Not a repository scope: ${scopeId}. Use <environment-id>/<repo>.`,
+    });
+  }
+  return scope;
 }
 
 const FILE_READ_FAILURE_CODES = ["ENOENT", "invalid_path", "file_too_large"] as const;
@@ -142,6 +142,7 @@ function createReadMemo<T extends { outcome: string }>() {
 export type ReadCacheUse = "shared" | "bypass";
 
 export interface GitReads {
+  repos(environmentId: string): Promise<GitReposResult>;
   status(
     environmentId: string,
     mergeBase: { kind: "environment" } | { kind: "explicit"; branch?: string },
@@ -214,8 +215,10 @@ function resolveFileSideRef(query: GitFileSideQuery): string | null {
 export function createGitReads(
   bb: BbPluginApi,
   freshness: (environmentId: string, shared: boolean) => GitReadFreshness,
+  mergeBases: ScopeMergeBases,
 ): GitReads {
   const host = createHostClient(bb);
+  const reposCache = createReadMemo<GitReposResult>();
   const statusCache = createReadMemo<GitStatusResult>();
   const filesCache = createReadMemo<GitFilesResult>();
 
@@ -235,26 +238,73 @@ export function createGitReads(
     }
   }
 
-  async function requireReady(
-    environmentId: string,
-  ): Promise<ReadyGitEnvironment | null> {
+  async function requireReady(scopeId: string): Promise<ReadyGitEnvironment> {
+    const { environmentId, repo } = requireScope(scopeId);
     const environment = await requireEnvironment(environmentId);
-    const path = requireWorkspacePath(environment);
-    if (!environment.isGitRepo) return null;
+    const path = joinHostPath({
+      rootPath: requireWorkspacePath(environment),
+      relativePath: repo,
+    });
+    if (path === null) {
+      throw new experimental_PluginRpcRefusal({
+        code: "conflict",
+        message: workspaceUnavailableMessage(environment),
+      });
+    }
     return { environment, hostId: environment.hostId, path };
   }
 
   return {
+    async repos(environmentId) {
+      const environment = await requireEnvironment(environmentId);
+      const path = requireWorkspacePath(environment);
+      if (environment.isGitRepo) {
+        return {
+          outcome: "not_applicable",
+          reason: "git_environment",
+          message: "The workspace is a git repository; the Git plugin shows it.",
+        };
+      }
+      return reposCache.read(
+        { environmentId, hostId: environment.hostId },
+        [path],
+        "shared",
+        async () => {
+          const result = await host.call("repos", { path }, environment.hostId);
+          if (result.outcome !== "available") {
+            throw new experimental_PluginRpcRefusal({
+              code: "conflict",
+              message: result.failure.message,
+            });
+          }
+          if (result.value.repos.length === 0) {
+            return {
+              outcome: "not_applicable",
+              reason: "no_repositories",
+              message: "No git repositories in the workspace.",
+            };
+          }
+          return {
+            outcome: "available",
+            repos: result.value.repos.map((repo) => ({
+              repo,
+              scopeId: formatScopeId(environmentId, repo),
+            })),
+          };
+        },
+      );
+    },
     async status(environmentId, mergeBase, cache) {
       const ready = await requireReady(environmentId);
-      if (ready === null) return notApplicable("status");
       const mergeBaseBranch =
         mergeBase.kind === "environment"
-          ? resolveEnvironmentMergeBaseBranch(ready.environment)
+          ? ((await mergeBases.get(environmentId)) ?? undefined)
           : mergeBase.branch;
+      const defaultMergeBase =
+        mergeBase.kind === "environment" && mergeBaseBranch === undefined;
       return statusCache.read(
         { environmentId, hostId: ready.hostId },
-        [ready.path, mergeBaseBranch ?? null],
+        [ready.path, mergeBaseBranch ?? null, defaultMergeBase],
         cache,
         async () => {
           const result = await host.call(
@@ -263,6 +313,7 @@ export function createGitReads(
               path: ready.path,
               freshness: freshness(environmentId, cache === "shared"),
               ...(mergeBaseBranch === undefined ? {} : { mergeBaseBranch }),
+              ...(defaultMergeBase ? { defaultMergeBase } : {}),
             },
             ready.hostId,
           );
@@ -274,7 +325,6 @@ export function createGitReads(
     },
     async diff(environmentId, target, limits = {}) {
       const ready = await requireReady(environmentId);
-      if (ready === null) return notApplicable("diff");
       const result = await host.call(
         "diff",
         {
@@ -293,7 +343,6 @@ export function createGitReads(
     },
     async files(environmentId, target, ignoreWhitespace, cache) {
       const ready = await requireReady(environmentId);
-      if (ready === null) return notApplicable("diff");
       return filesCache.read(
         { environmentId, hostId: ready.hostId },
         [ready.path, target, ignoreWhitespace],
@@ -317,7 +366,6 @@ export function createGitReads(
     },
     async patches(environmentId, target, ignoreWhitespace, paths, cache) {
       const ready = await requireReady(environmentId);
-      if (ready === null) return notApplicable("diff");
       const readFreshness = freshness(environmentId, cache === "shared");
       const patches: DiffPatchEntry[] = [];
       let pending = paths;
@@ -341,8 +389,7 @@ export function createGitReads(
       return { outcome: "available", patches };
     },
     async fileSide(environmentId, query) {
-      const environment = await requireEnvironment(environmentId);
-      const rootPath = requireWorkspacePath(environment);
+      const { environment, path: rootPath } = await requireReady(environmentId);
       const relativePath = query.path.replace(/^\/+/u, "");
       const path =
         relativePath.length === 0 || relativePath.split("/").includes("..")
@@ -380,8 +427,7 @@ export function createGitReads(
       }
     },
     async branches({ environmentId, query, limit, selectedBranch }) {
-      const environment = await requireEnvironment(environmentId);
-      const path = requireWorkspacePath(environment);
+      const { environment, path } = await requireReady(environmentId);
       return host.call(
         "branches",
         {
@@ -394,10 +440,12 @@ export function createGitReads(
       );
     },
     clearCaches(environmentId) {
+      reposCache.clear(environmentId);
       statusCache.clear(environmentId);
       filesCache.clear(environmentId);
     },
     clearHostCaches(hostId) {
+      reposCache.clearHost(hostId);
       statusCache.clearHost(hostId);
       filesCache.clearHost(hostId);
     },

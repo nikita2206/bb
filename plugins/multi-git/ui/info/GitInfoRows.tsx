@@ -23,6 +23,8 @@ import {
   type MergeBaseState,
 } from "../merge-base.js";
 import { useGitStatus } from "../queries.js";
+import { useSelectedScope } from "../repo-selection.js";
+import { RepoPicker } from "../RepoPicker.js";
 import type {
   WorkspaceResolutionFailure,
 } from "bb-environment-provider-host/git-types";
@@ -61,8 +63,24 @@ function CopyableValue({
   );
 }
 
+export function RepositoryInfoRow({ environment }: ExperimentalThreadInfoProps) {
+  const { selected, repos, select } = useSelectedScope(environment?.id ?? null);
+  if (selected === null) return null;
+  return (
+    <DetailRow icon="FolderGit" label="Repository">
+      <RepoPicker
+        repos={repos}
+        selected={selected}
+        onSelect={select}
+        className="max-w-full"
+      />
+    </DetailRow>
+  );
+}
+
 export function BranchInfoRow({ environment }: ExperimentalThreadInfoProps) {
-  const { workspace } = useGitStatus(environment?.id ?? null);
+  const { scopeId } = useSelectedScope(environment?.id ?? null);
+  const { workspace } = useGitStatus(scopeId);
   return workspace === undefined ? null : <BranchRowView workspace={workspace} />;
 }
 
@@ -94,7 +112,7 @@ export function BranchRowView({ workspace }: { workspace: WorkspaceStatus }) {
 }
 
 export function MergeBaseInfoRow({ environment }: ExperimentalThreadInfoProps) {
-  const environmentId = environment?.id ?? null;
+  const environmentId = useSelectedScope(environment?.id ?? null).scopeId;
   const { workspace } = useGitStatus(environmentId);
   const mergeBase = useMergeBase(environmentId, workspace);
   return <MergeBaseRowView workspace={workspace} mergeBase={mergeBase} />;
@@ -177,9 +195,8 @@ export function formatBranchComparison({
 }
 
 export function GitStatusInfoRow(props: ExperimentalThreadInfoProps) {
-  const { workspace, failure, errorMessage } = useGitStatus(
-    props.environment?.id ?? null,
-  );
+  const { scopeId } = useSelectedScope(props.environment?.id ?? null);
+  const { workspace, failure, errorMessage } = useGitStatus(scopeId);
   return (
     <GitStatusRowView
       workspace={workspace}

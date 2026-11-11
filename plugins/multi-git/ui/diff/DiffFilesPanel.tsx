@@ -27,6 +27,7 @@ import {
   useDiffFileCardStates,
   writeDiffFileCardStates,
 } from "./diffFilesStore.js";
+import { workspaceFileTarget } from "../repo-selection.js";
 
 const DIFF_FILES_OVERSCAN = 4;
 const DIFF_FILES_GAP_PX = 8;
@@ -293,11 +294,9 @@ function DiffFileRow({
   onOpenFilePreview,
   onRequestFileContents,
 }: DiffFileRowProps) {
-  const canOpenFileExternally = useCanOpenFileExternally({
-    kind: "workspace",
-    environmentId,
-    path: entry.path,
-  });
+  const canOpenFileExternally = useCanOpenFileExternally(
+    workspaceFileTarget(environmentId, entry.path),
+  );
 
   const handleToggleCollapsed = useCallback(() => {
     const current =

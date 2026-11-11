@@ -8,7 +8,7 @@ import gitApp from "./app.js";
 
 const app = await loadPluginApp(() => import("./app.js"));
 
-it("registers the Diff tab, Info rows and sections, the composer segment, and the Commit header action", () => {
+it("registers the Diff tab, the Repository and git Info rows and sections, and the composer segment", () => {
   expect(app.tabs).toMatchObject([
     {
       id: "diff",
@@ -23,6 +23,7 @@ it("registers the Diff tab, Info rows and sections, the composer segment, and th
     false,
   );
   expect(app.threadInfoRows.map((row) => row.id)).toEqual([
+    "repository",
     "branch",
     "merge-base",
     "git-status",
@@ -34,21 +35,15 @@ it("registers the Diff tab, Info rows and sections, the composer segment, and th
   expect(app.threadContextSegments).toMatchObject([
     { id: "changed-files", group: "3_git", order: 10 },
   ]);
-  expect(app.threadActions).toMatchObject([
-    { id: "commit", placement: "header", title: "Commit" },
-  ]);
-  expect(app.appOverlays.map((overlay) => overlay.id)).toEqual([
-    "commit-dialog",
-  ]);
+  expect(app.threadActions).toEqual([]);
+  expect(app.appOverlays).toEqual([]);
 });
 
-it("toggles the Diff tab through the thread's panel with Mod+D", async () => {
+it("toggles the Diff tab through the thread's panel, leaving Mod+D to bb--git", async () => {
   const [command] = collectPluginAppRegistrations(gitApp).commandPaletteActions;
   if (command?.target !== "app") throw new Error("expected an app command");
-  expect(command).toMatchObject({
-    id: "toggle-diff",
-    defaultShortcut: { key: "d", mod: true },
-  });
+  expect(command.id).toBe("toggle-diff");
+  expect(command.defaultShortcut).toBeNull();
   const panel = experimental_makePanelController({
     toggleTab: vi.fn(() => true),
   });

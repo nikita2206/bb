@@ -16,6 +16,7 @@ import {
   type ChangedFileActions,
 } from "../changed-files.js";
 import { useGitStatus } from "../queries.js";
+import { useSelectedScope } from "../repo-selection.js";
 import type { WorkspaceStatus } from "../../contract.js";
 
 function copyCommitSha(sha: string): void {
@@ -97,7 +98,8 @@ function CommitsSectionContent({ environmentId }: { environmentId: string }) {
 export function CommitsInfoSection({
   environment,
 }: ExperimentalThreadInfoProps) {
-  return environment === null ? null : (
-    <CommitsSectionContent environmentId={environment.id} />
+  const { scopeId } = useSelectedScope(environment?.id ?? null);
+  return scopeId === null ? null : (
+    <CommitsSectionContent environmentId={scopeId} />
   );
 }

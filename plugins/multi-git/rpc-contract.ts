@@ -14,6 +14,8 @@ import {
   gitFilesResultSchema,
   gitFilesTag,
   gitPatchResultSchema,
+  gitReposResultSchema,
+  gitReposTag,
   gitRefsTag,
   gitStatusResultSchema,
   gitStatusRowSchema,
@@ -39,9 +41,16 @@ const environmentInputSchema = z
   .strict();
 
 export const gitRpcContract = defineRpcContract({
+  repos: {
+    experimental_description:
+      "The git repositories directly inside a non-git environment's workspace, with their scope ids.",
+    input: environmentInputSchema,
+    output: gitReposResultSchema,
+    tags: ({ environmentId }) => [gitReposTag(environmentId)],
+  },
   status: {
     experimental_description:
-      "Git status of each environment's workspace, keyed by environment id. Branch comparison uses the environment's merge base.",
+      "Git status of each repository scope, keyed by scope id. Branch comparison uses the scope's merge base.",
     input: z
       .object({
         keys: z.array(z.string().min(1)).min(1).max(GIT_STATUS_MAX_KEYS),
@@ -166,7 +175,7 @@ export const gitRpcContract = defineRpcContract({
   },
   setMergeBase: {
     experimental_description:
-      "Compare an environment against a branch, or null for its default.",
+      "Compare a repository scope against a branch, or null for its default.",
     input: environmentInputSchema
       .extend({ mergeBaseBranch: gitBranchNameSchema.nullable() })
       .strict(),
@@ -188,7 +197,7 @@ export const gitRpcContract = defineRpcContract({
   },
   refresh: {
     experimental_description:
-      "Drop an environment's cached git reads and refresh every view of them, for example after a commit.",
+      "Drop a scope's cached git reads, or every scope of an environment, and refresh every view of them.",
     input: environmentInputSchema,
     output: z.object({ ok: z.literal(true) }).strict(),
   },

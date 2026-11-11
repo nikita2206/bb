@@ -59,6 +59,18 @@ export function tagsForEnvironmentChanges(
   };
 }
 
+const REPOS_CHANGES: ReadonlySet<EnvironmentChangeKind> = new Set([
+  "work-status-changed",
+  "metadata-changed",
+  "status-changed",
+]);
+
+export function reposChanged(
+  changes: readonly EnvironmentChangeKind[],
+): boolean {
+  return changes.some((change) => REPOS_CHANGES.has(change));
+}
+
 interface PendingFlush {
   tags: Set<string>;
   firstAt: number;

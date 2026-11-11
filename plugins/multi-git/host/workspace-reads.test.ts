@@ -298,6 +298,26 @@ describe.concurrent("WorkspaceReads", () => {
     ]);
   });
 
+  it("compares with the resolved default branch when asked for the default merge base", async ({
+    onTestFinished,
+  }) => {
+    const repoPath = await copyRepository(
+      await makeTempDir(onTestFinished, "bb-workspace-repo-"),
+    );
+    await runGit(["checkout", "-b", "feature"], { cwd: repoPath });
+    await fs.writeFile(path.join(repoPath, "README.md"), "feature\n", "utf8");
+    await runGit(["commit", "-am", "Feature commit"], { cwd: repoPath });
+
+    const status = await new WorkspaceReads(repoPath, tmpdir()).getStatus({
+      freshness: fresh(),
+      defaultMergeBase: true,
+    });
+    expect(status.mergeBase).toMatchObject({
+      mergeBaseBranch: "main",
+      aheadCount: 1,
+    });
+  });
+
   it("caps listed working-tree files, keeping tracked changes ahead of untracked files", async ({
     onTestFinished,
   }) => {
