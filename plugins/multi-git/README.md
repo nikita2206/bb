@@ -27,6 +27,8 @@ Keep the diff against `plugins/git` small so upstream changes merge easily.
 - `app.tsx` registers the Diff tab, Info rows (including Repository) and
   sections, and the changed-files segment. `ui/repo-selection.ts` holds the
   selected repo per environment (shared by every slot; default: first repo
-  with changes); `ui/RepoPicker.tsx` switches it.
+  with changes); `ui/RepoPicker.tsx` switches it. Core passes the composer's
+  context segments no environment unless the root is a git repository, so the
+  segment resolves it from the thread (`threadEnvironment` RPC).
 - Removed from bb--git: the Commit action and dialog (core's commit only
   works on git-root environments) and the `Mod+D` shortcut (bb--git owns it).

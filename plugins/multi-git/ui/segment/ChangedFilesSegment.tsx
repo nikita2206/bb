@@ -26,7 +26,11 @@ import { WorkspaceChangesList } from "@bb/shared-ui/workspace-changes-list";
 import { useChangedFileActions } from "../changed-files.js";
 import { useMergeBase, type MergeBaseState } from "../merge-base.js";
 import { useGitStatus, useShowGitChanges } from "../queries.js";
-import { useSelectedScope, type RepoEntry } from "../repo-selection.js";
+import {
+  useSegmentEnvironmentId,
+  useSelectedScope,
+  type RepoEntry,
+} from "../repo-selection.js";
 import { RepoChangeCounts, RepoPicker } from "../RepoPicker.js";
 import type { WorkspaceFileStatus, WorkspaceStatus } from "../../contract.js";
 
@@ -54,12 +58,16 @@ function useFocusHandoff(
 }
 
 export function useChangedFilesSegmentVisible({
+  threadId,
   environment,
 }: ExperimentalThreadContextSegmentInput): boolean {
   const show = useShowGitChanges();
   const kind = experimental_useThreadContextKind();
-  const environmentId =
-    show && kind === "banner" ? (environment?.id ?? null) : null;
+  const environmentId = useSegmentEnvironmentId(
+    threadId,
+    environment,
+    show && kind === "banner",
+  );
   const { repos } = useSelectedScope(environmentId);
   return (
     environmentId !== null &&
@@ -319,7 +327,7 @@ export function changedFilesSegmentPart(part: SegmentPart) {
     props: ExperimentalThreadContextSegmentProps,
   ) {
     const { selected, repos, select } = useSelectedScope(
-      props.environment?.id ?? null,
+      useSegmentEnvironmentId(props.threadId, props.environment, true),
     );
     return selected === null ? null : (
       <SegmentContent

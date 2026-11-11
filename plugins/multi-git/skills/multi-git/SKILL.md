@@ -26,8 +26,9 @@ bb multi-git viewed list|mark|unmark|clear <scope-id> --target <target> ...
   Branch targets take `--merge-base-branch`; `commit` takes `--sha`. `file`
   takes `--merge-base-ref <sha>` for branch targets instead. Paths are
   relative to the repository.
-- Without `--merge-base-branch`, status compares with the merge base chosen
-  for that repository in the UI, else the repository's default branch.
+- `status` shows ahead/behind and committed files only with
+  `--merge-base-branch`; the UI compares with the merge base picked for that
+  repository, else its default branch.
 - Viewed marks are stored per repository and diff target; new edits un-view a
   file.
 

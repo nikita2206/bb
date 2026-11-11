@@ -49,6 +49,21 @@ export function useReposAvailable(environmentId: string | null): boolean {
   return useRepos(environmentId).data?.outcome === "available";
 }
 
+export function useSegmentEnvironmentId(
+  threadId: string,
+  environment: { id: string } | null | undefined,
+  enabled: boolean,
+): string | null {
+  const lookup = useRpcQuery({
+    contract: gitRpcContract,
+    method: "threadEnvironment",
+    input: { threadId },
+    enabled: enabled && !environment,
+  });
+  if (!enabled) return null;
+  return environment?.id ?? lookup.data?.environmentId ?? null;
+}
+
 export function workspaceHasChanges(
   workspace: WorkspaceStatus | undefined,
 ): boolean {

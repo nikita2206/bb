@@ -46,20 +46,25 @@ const STATUS_BY_REPO: Record<string, WorkspaceStatus> = {
   }),
 };
 
-it("names the selected repo and counts the other repos with changes", async () => {
+const SUMMARY_LABEL = "Changed files: api, Uncommitted, 1 file, +2 -1, +2 repos";
+
+function renderSummary(environment: { id: string } | null) {
   const Summary = changedFilesSegmentPart("summary");
   renderSlot(
     { component: Summary },
     {
       threadId: "thr-1",
       projectId: "prj-1",
-      environment: { id: "env-1" },
+      environment,
       segments: [],
       isExpanded: false,
       onToggle: () => undefined,
     },
     {
       rpc: {
+        threadEnvironment: ({ threadId }) => ({
+          environmentId: threadId === "thr-1" ? "env-1" : null,
+        }),
         repos: ({ environmentId }) =>
           makeGitRepos(environmentId, ["api", "pricing", "search", "web"]),
         status: ({ keys }) =>
@@ -79,11 +84,20 @@ it("names the selected repo and counts the other repos with changes", async () =
       pluginId: "multi-git",
     },
   );
-  await waitFor(() =>
-    expect(
-      screen.getByRole("button", { name: /^Changed files:/ }).getAttribute(
-        "aria-label",
-      ),
-    ).toBe("Changed files: api, Uncommitted, 1 file, +2 -1, +2 repos"),
-  );
+}
+
+function summaryLabel(): string | null {
+  return screen
+    .getByRole("button", { name: /^Changed files:/ })
+    .getAttribute("aria-label");
+}
+
+it("names the selected repo and counts the other repos with changes", async () => {
+  renderSummary({ id: "env-1" });
+  await waitFor(() => expect(summaryLabel()).toBe(SUMMARY_LABEL));
+});
+
+it("resolves the environment from the thread when the composer passes none", async () => {
+  renderSummary(null);
+  await waitFor(() => expect(summaryLabel()).toBe(SUMMARY_LABEL));
 });

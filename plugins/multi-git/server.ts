@@ -249,6 +249,10 @@ export default function gitPlugin(bb: BbPluginApi): void {
     gitRpcContract,
     {
       repos: ({ environmentId }) => reads.repos(environmentId),
+      async threadEnvironment({ threadId }) {
+        const thread = await bb.sdk.threads.get({ threadId });
+        return { environmentId: thread.environmentId };
+      },
       async status({ keys }) {
         const results = await Promise.all(
           keys.map(

@@ -48,6 +48,12 @@ export const gitRpcContract = defineRpcContract({
     output: gitReposResultSchema,
     tags: ({ environmentId }) => [gitReposTag(environmentId)],
   },
+  threadEnvironment: {
+    experimental_description:
+      "A thread's environment id. The composer context row gets no environment for non-git workspaces, so it resolves it from the thread.",
+    input: z.object({ threadId: z.string().min(1) }).strict(),
+    output: z.object({ environmentId: z.string().nullable() }).strict(),
+  },
   status: {
     experimental_description:
       "Git status of each repository scope, keyed by scope id. Branch comparison uses the scope's merge base.",
